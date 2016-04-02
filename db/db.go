@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mc0/okq/config"
-	"github.com/mc0/okq/log"
+	"github.com/mediocregopher/bananaq/config"
+	"github.com/mediocregopher/bananaq/log"
 	"github.com/mediocregopher/radix.v2/redis"
 )
 

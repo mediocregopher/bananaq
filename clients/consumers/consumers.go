@@ -3,8 +3,8 @@ package consumers
 import (
 	"time"
 
-	"github.com/mc0/okq/clients"
-	"github.com/mc0/okq/db"
+	"github.com/mediocregopher/bananaq/clients"
+	"github.com/mediocregopher/bananaq/db"
 )
 
 var callCh = make(chan func(*state))

@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mc0/okq/clients"
-	"github.com/mc0/okq/db"
+	"github.com/mediocregopher/bananaq/clients"
+	"github.com/mediocregopher/bananaq/db"
 )
 
 func TestRestore(t *T) {

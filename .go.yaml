@@ -1,5 +1,5 @@
 ---
-path: github.com/mc0/okq
+path: github.com/mediocregopher/bananaq
 deps:
     - loc: github.com/mediocregopher/lever
     - loc: github.com/mediocregopher/pubsubch

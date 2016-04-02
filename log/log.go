@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mc0/okq/config"
+	"github.com/mediocregopher/bananaq/config"
 )
 
 type okqLogger struct {

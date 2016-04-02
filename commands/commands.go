@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mc0/okq/clients"
-	"github.com/mc0/okq/clients/consumers"
-	"github.com/mc0/okq/config"
-	"github.com/mc0/okq/db"
-	"github.com/mc0/okq/log"
+	"github.com/mediocregopher/bananaq/clients"
+	"github.com/mediocregopher/bananaq/clients/consumers"
+	"github.com/mediocregopher/bananaq/config"
+	"github.com/mediocregopher/bananaq/db"
+	"github.com/mediocregopher/bananaq/log"
 	"github.com/mediocregopher/radix.v2/redis"
 )
 

@@ -3,8 +3,8 @@ package consumers
 import (
 	"time"
 
-	"github.com/mc0/okq/db"
-	"github.com/mc0/okq/log"
+	"github.com/mediocregopher/bananaq/db"
+	"github.com/mediocregopher/bananaq/log"
 	"github.com/mediocregopher/pubsubch"
 )
 

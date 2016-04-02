@@ -1,22 +1,24 @@
-# okq
+# bananaq
 
-[![Build Status](https://travis-ci.org/mc0/okq.svg?branch=master)](https://travis-ci.org/mc0/okq)
+(Pronounced: "Banana queue")
 
-okq is a redis-backed queueing server with a focus on simplicity, both in code
+[![Build Status](https://travis-ci.org/mediocregopher/bananaq.svg?branch=master)](https://travis-ci.org/mediocregopher/bananaq)
+
+bananaq is a redis-backed queueing server with a focus on simplicity, both in code
 and interface.
 
 * At-least-once by default. At-most-once is supported by setting `EX` the
   parameter to `0` when consuming events. Once successfully submitted events
-  interacted with atomically in redis; okq crashing will never result in loss of data.
+  interacted with atomically in redis; bananaq crashing will never result in loss of data.
 
-* Clients talk to okq using the redis protocol. So if your language has a redis
-  driver you already have an okq driver as well.
+* Clients talk to bananaq using the redis protocol. So if your language has a redis
+  driver you already have an bananaq driver as well.
 
 * Binary safe
 
 * Supports a single redis instance or a redis cluster
 
-* Multiple okq instances can run on the same redis instance/cluster without
+* Multiple bananaq instances can run on the same redis instance/cluster without
   knowing about each other, easing deployment
 
 ## Table of contents
@@ -41,44 +43,44 @@ and interface.
 
 ## Install
 
-From within the okq project root:
+From within the bananaq project root:
 
     go get ./...
     go build
 
-You'll now have an `okq` binary. To get started you can do `okq -h` to see
+You'll now have an `bananaq` binary. To get started you can do `bananaq -h` to see
 available options
 
 ## Configuration
 
-okq can take in options on the command line, through environment variables, or
+bananaq can take in options on the command line, through environment variables, or
 from a config file. All configuration parameters are available through any of
 the three. The three methods can be mixed an matched, with environment variables
 taking precedence over a config file, and command line arguments taking
 precedence over environment variables.
 
     # See command line parameters and descriptions
-    okq -h
+    bananaq -h
 
     # Create a configuration file with default values pre-populated
-    okq --example > okq.conf
+    bananaq --example > bananaq.conf
 
     # Use configuration file
-    okq --config okq.conf
+    bananaq --config bananaq.conf
 
     # Set --listen-addr argument in an environment variable (as opposed to on
     # the command line or the configuration file
-    export OKQ_LISTEN_ADDR=127.0.0.1:4777
-    okq
+    export bananaq_LISTEN_ADDR=127.0.0.1:4777
+    bananaq
 
     # Mix all three
-    export OKQ_LISTEN_ADDR=127.0.0.1:4777
-    okq --config okq.conf --redis-cluster --redis-addr=127.0.0.1:6380
+    export bananaq_LISTEN_ADDR=127.0.0.1:4777
+    bananaq --config bananaq.conf --redis-cluster --redis-addr=127.0.0.1:6380
 
 ## Usage
 
-By default okq listens on port 4777. You can connect to it using any existing
-redis client, and all okq commands look very similar to redis commands. For
+By default bananaq listens on port 4777. You can connect to it using any existing
+redis client, and all bananaq commands look very similar to redis commands. For
 example, to peek at the next event on the `foo` queue:
 
 ```
@@ -92,7 +94,7 @@ See the next section for all available commands.
 
 ## Commands
 
-okq is modeled as a left-to-right queue. Clients submit events on the left
+bananaq is modeled as a left-to-right queue. Clients submit events on the left
 side of the queue (with `QLPUSH`), and consumers read off the right side (with
 `QRPOP`).
 
@@ -121,7 +123,7 @@ possible, even if the event can't be successfully added.
 
 Returns `OK` on success
 
-Returns an error if `NOBLOCK` is set and the okq instance is too overloaded to
+Returns an error if `NOBLOCK` is set and the bananaq instance is too overloaded to
 handle the event in the background. Increasing `bg-push-pool-size` will
 increase the number of available routines which can handle unblocked push
 commands.
@@ -192,7 +194,7 @@ nil if the queue is empty.
 
 > QACK queue eventID
 
-Acknowledges that it is safe for okq to forget about this event for this queue.
+Acknowledges that it is safe for bananaq to forget about this event for this queue.
 
 If this is not called within some amount of time after popping the event off the
 queue (see [QRPOP](#qrpop) for more on configuring that timeout) then the event
@@ -232,8 +234,8 @@ Returns a queue's name, or `nil` if no new events became available within the
 timeout.
 
 *NOTE This feature is supported using an internal redis pubsub channel.
-Consequently, if an event is pushed to a queue on one instance of okq, another
-instance of okq pointed at the same redis instance/cluster as the first will
+Consequently, if an event is pushed to a queue on one instance of bananaq, another
+instance of bananaq pointed at the same redis instance/cluster as the first will
 still send the queue name to all relevant clients calling QNOTIFY.*
 
 ### QFLUSH
@@ -272,7 +274,7 @@ An array of arrays will be returned, for example:
 
 The integer values returned indicate (respectively):
 
-* total - The number of events currently held by okq for the queue, both those
+* total - The number of events currently held by bananaq for the queue, both those
   that are awaiting a consumer and those which are actively held by a consumer
 
 * processing - The number of events for the queue which are being actively held
@@ -313,7 +315,7 @@ output of the same data see the [QSTATUS](#qstatus) command*
 
 ## Consumers
 
-Writing okq clients (those which only submit events) is easy: A redis driver and
+Writing bananaq clients (those which only submit events) is easy: A redis driver and
 a call to [QLPUSH](#qlpush) are all that are needed.
 
 The logic for consumer clients (those which are retrieving events and processing
