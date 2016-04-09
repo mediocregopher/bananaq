@@ -2,24 +2,29 @@
 
 (Pronounced: "Banana queue")
 
+# THIS IS SUPER ALPHA UNSTABLE WIP YMMV DONT TRY THIS AT HOME, DONT USE IT
+
+Like half the docs in this README are actually from okq, so don't read through
+this all and expect it to make sense.
+
 [![Build Status](https://travis-ci.org/mediocregopher/bananaq.svg?branch=master)](https://travis-ci.org/mediocregopher/bananaq)
 
-bananaq is a redis-backed queueing server with a focus on simplicity, both in code
-and interface.
+bananaq is conceptually similar to kafka, but with major improvements in terms
+of simplicity, ease-of-use, and (the biggest improvement of all) not running on
+the JVM.
 
-* At-least-once by default. At-most-once is supported by setting `EX` the
-  parameter to `0` when consuming events. Once successfully submitted events
-  interacted with atomically in redis; bananaq crashing will never result in loss of data.
+Features of bananaq:
 
 * Clients talk to bananaq using the redis protocol. So if your language has a redis
   driver you already have an bananaq driver as well.
 
-* Binary safe
+* Binary safe.
 
-* Supports a single redis instance or a redis cluster
+* Supports a single redis instance or a redis cluster. So scaling and optimizing
+  bananaq is as easy as scaling/optimizing redis.
 
 * Multiple bananaq instances can run on the same redis instance/cluster without
-  knowing about each other, easing deployment
+  knowing about each other, easing deployment.
 
 ## Table of contents
 
@@ -40,6 +45,134 @@ and interface.
   * [QINFO](#qinfo)
 * [Consumers](#consumers)
 
+## Concepts
+
+    * Events are pushed on to queues in fifo style.
+
+      Each event is assigned an
+      id, which is a timestamp (monotonically increasing across the cluster, so
+      each event's id is unique).
+
+        * The client cannot specify an id, negating the ability to do
+          "de-duplication" of events. bananaq is a message passing service, not
+          a storage service. If you want to know if something has happened
+          somewhere else already, store that fact in a storage service and use
+          that.
+
+    * When an event is pushed, its timeout is also specified. After this
+      timeout, the event will no longer exist in bananaq.
+
+    * Consumers declare their "consumer group" when consuming. Consumer groups
+      are arbitrary and can appear/dissappear arbitrarily.
+
+    * An event is only handed out to at most one consumer within a group at a
+      time. Once an event has been processed, it will not be seen within a group
+      again.
+
+    * An event can be set to require acknowlegement after a certain timeout, or
+      it will be put back in the queue. This is done on a per-consumer group
+      basis.
+
+    * An event's status for one group does not affect its status in another.
+      Therefore, an event might be "completed" by all known consumer groups, but
+      that doesn't mean its data can be discarded. An event is only discarded
+      once its timeout is reached.
+
+    * Each queue is a sorted set of events. The score is the id/timestamp
+      of the event, the value is the timestamp it will timeout at
+
+    * A consumer group looks through the queue from back to front. As it
+      consumes events it marks down what it's currently processing, and the
+      latest that has been completely processed.
+
+        * This has problems, imagine the following scenario:
+
+          - Queue has [A, B, C, D]
+          - Consumer group has consumers foo and bar
+          - A has been completed for this group
+          - foo claims B
+          - bar wants to get next event.
+
+          Obviously C is next, but how can bar know that? It would have to
+          simultaneously know the queue's contents and the current actions of
+          all the other consumers.
+
+        * Idea: queue is sorted set. Consumer group keeps three sorted sets,
+          done, redo, and inprogress, scores also timestamp/id, values also
+          expire time
+
+          When consumer is getting an event:
+          - If redo is not empty, take first id from it, put it in inprogress.
+          - If either done and inprogress are not empty, get latest from both.
+            Use that to get next from queue, and add to inprogress
+          - If done and inprogress are empty, get first in queue, and put it in
+            inprogress.
+
+          When consumer is acking an event:
+          - If acking success, delete id from inprogress, add it to done. Delete
+            everything in done with a lower score
+          - If acking failure, delete id from inprogress, add it to redo
+
+          When cleaning events:
+          - From the queue delete all events with a value less than the current
+            time
+          - From done and redo delete all events that have a value less than the
+            current time
+          - From inprogress move all events that have a value less than the
+            current time to redo
+
+          This idea assumes:
+          - ids are monotonically increasing
+          - all four sorted sets on same redis node
+
+    * Would be nice to partition queues implicitely. Given that redis is backing
+      bananaq, a single sorted set cannot be split across nodes. Instead we have
+      to make multiple sorted sets. This could be done client-side, by having
+      the client's do the sharding across multiple queues themselves. But that's
+      kind of lame.
+
+      On the other hand, doing it implicitely would be somewhat difficult. If a
+      consumer knows only the name of the queue, it doesn't know which shard of
+      the queue actually has any events. So it must go to them one-by-one and
+      ask.
+
+        * Choosing the shard ask-order randomly each time would be one solution,
+          although not a great one. We've nixed all ordering guarantees, so
+          that's not a concern, but for a highly sharded queue that happens to
+          have few active events in it, it'd be a lot of wasted work.
+
+        * Having each consumer assign themselves a shard number they start the
+          search from would be interesting. They would start from their number
+          and work their way around the "ring". If the numbers chosen by the
+          different consumers were spread out enough this would have the
+          net-result of speeding up consuming. However it would also cause
+          certain shards to be preferred highly, so this might not work.
+
+        * It's not ACTUALLY necessary to split the sorted sets. Those will grow
+          to be quite large, but the actual in memory use shouldn't be crazy. A
+          million entries in a sorted set takes about 135MB, and they really
+          never should need to get that large. If they do actually need to be
+          that large, then the user can do app-side sharding as well.
+
+          Since the sorted sets only need the actual ids in them, the events
+          themselves can just be normal keys scattered around the cluster, with
+          their expire set properly.
+
+      It's also not clear how the number of shards would even be determined.
+
+        * A global number would work. However this could be a waste for clusters
+          that have a couple very active queues and many many not-so-active
+          queues, depending on the sharding strategy used.
+
+        * A number per queue would be optimal, but how to assign that number?
+          Could it be assigned during insert? Then the client and consumer would
+          both have to coordinate the number. I'd like to avoid having a command
+          which explicitely sets it, since that's configuration data being
+          modified by a server command, which I don't like.
+
+        * In the third idea where we don't actually split the sorted sets it
+          won't be necessary to pick a shard size, the redis cluster shards the
+          event data automatically.
 
 ## Install
 
@@ -107,114 +240,84 @@ It is not necessary to instantiate a queue. Simply pushing an event onto it or
 creating a consumer for it implicitly creates it. Deleting a queue is also not
 necessary, once a queue has no events and no consumers it no longer exists.
 
-### QLPUSH
+### QADD
 
-> QLPUSH queue eventID contents [NOBLOCK]
+> QADD queue expireSeconds contents [NOBLOCK]
 
-Add an event as the new left-most event in the queue.
+Add an event to the given queue.
 
-eventID must be a unique string identifying the event. If an event with the
-same eventID already exists in the queue an error will be returned. In most
-cases a UUID will suffice.
+`queue` is any arbitrary queue name.
 
-This will not return with success until the event has been successfully stored
-in redis. Set `NOBLOCK` if you want the server to return success as soon as
-possible, even if the event can't be successfully added.
+`expireSeconds` is the number of seconds from this moment after which the event
+will be removed from the queue. It may be an integer string, or a float string
+for less than second precision.
 
-Returns `OK` on success
+This will not return until the event has been successfully stored in redis. Set
+`NOBLOCK` if you want the server to return as soon as possible, even if the
+event can't be successfully added.
 
-Returns an error if `NOBLOCK` is set and the bananaq instance is too overloaded to
-handle the event in the background. Increasing `bg-push-pool-size` will
+Returns the event's id (a string) on success.
+
+Returns an error if `NOBLOCK` is set and the bananaq instance is too overloaded
+to handle the event in the background. Increasing `bg-push-pool-size` will
 increase the number of available routines which can handle unblocked push
 commands.
 
-### QRPUSH
+### QGET
 
-> QRPUSH queue eventId contents [NOBLOCK]
+> QGET queue consumerGroup [EX expireSeconds]
 
-Behaves the same as [QLPUSH](#qlpush), except it pushes the event onto the
-right side of the queue (the front). The event will be the next one consumed,
-making this useful for one-off high priority events. However for a true high
-priority queue it often makes more sense to have a second queue with its own
-set of consumers than to use this.
+Retrieve the next available event from the given queue for the given
+consumer-group.
 
-### QLPEEK
+`queue` is any arbitrary queue name.
 
-> QLPEEK queue
+`consumerGroup` is any arbitrary name a consumer group this consumer is
+consuming as.
 
-Look at the left-most event in the queue, without actually consuming it.
-
-Returns an array-reply with the eventID and contents of the left-most event, or
-nil if the queue is empty.
-
-```
-> QLPEEK foo
-< 1) "d7601248-ea90-4abc-a6e2-ff259f1205d1"
-  2) "event contents"
-
-> QLPEEK empty-queue
-< (nil)
-```
-
-### QRPEEK
-
-> QLPEEK queue
-
-Behaves the same as [QLPEEK](#qlpeek), except it looks at the right-most event
-on the queue (the one which will be consumed next).
-
-### QRPOP
-
-> QRPOP queue [EX seconds]
-
-Pop the right-most event off the queue.
-
-`EX seconds` determines how long the consumer has to [QACK](#qack) the event
-before it is put back onto the right side of the queue (so it will be consumed
-next) and made available to other consumers again. If not set, defaults to 30
+`EX expireSeconds` determines how long the consumer has to [QACK](#qack) the
+event before it is marked as available (so it will be consumed next) and made
+available to other consumers in the group again. It may be an integer string, or
+a float string for less than second precision. If not set, defaults to 30
 seconds. If set to `0` the event will automatically be acknowledged.
 
-Furthermore, when sending `EX 0` it is not necessary for the consumer to send
-a corresponding [QACK](#qack). Setting this option allows you to make a
-particular queue at-most-once (rather than at-least-once).
-
-Returns an array-reply with the eventID and contents of the right-most event, or
-nil if the queue is empty.
+Returns an array-reply with the eventID and contents of an event in the queue,
+or nil if the queue is empty.
 
 ```
-> QRPOP foo
+> QGET foo cool-kids
 < 1) "9919b6ba-298a-44ee-9127-7176e91fd7d7"
   2) "event contents to be consumed"
 
-> QRPOP empty-queue
+> QGET foo cool-kids
 < (nil)
 ```
 
 ### QACK
 
-> QACK queue eventID
+> QACK queue consumerGroup eventID
 
-Acknowledges that it is safe for bananaq to forget about this event for this queue.
+Acknowledges that the given event has been successfully processed by a consumer
+in `consumerGroup`, so it won't be given to any consumers in that group again.
 
-If this is not called within some amount of time after popping the event off the
-queue (see [QRPOP](#qrpop) for more on configuring that timeout) then the event
-will be placed back onto the right side of the queue (so it will be consumed
-next).
+If this is not called within some amount of time after [QGET](#qget)ing the
+event off the queue then the event will be marked as available again so any
+consumers in that consumer group can get it again.
 
 Returns an integer `1` if the event was acknowledged successfully, or `0` if not
 (implying the event timed out or it was acknowledged by another consumer).
 
 ### QREGISTER
 
-> QREGISTER [queue ...]
+> QREGISTER consumerGroup [queue ...]
 
-Register a client to zero or more queues. Used in conjunction with
-[QNOTIFY](#qnotify).
+Register a client as a consumer for `consumerGroup` of zero or more queues. Used
+in conjunction with [QNOTIFY](#qnotify).
 
-Subsequent QREGISTER calls on the same client connection overwrites the queue
-list from previous calls. Calling QREGISTER with no queues de-registers the
-client from all queues. The client disconnecting also deregisters it from all
-queues.
+Subsequent QREGISTER calls on the same client connection overwrites the
+`consumerGroup` and queue list from previous calls. Calling QREGISTER with no
+queues de-registers the client from all queues. The client disconnecting also
+deregisters it from all queues.
 
 Once registered a client is considered a consumer and can call
 [QNOTIFY](#qnotify) to block until an event is available on one of its
@@ -244,7 +347,7 @@ still send the queue name to all relevant clients calling QNOTIFY.*
 
 Removes all events from the given queue.
 
-Effictively makes it as if the given queue never existed. Any events in the
+Effectively makes it as if the given queue never existed. Any events in the
 process of being consumed from the given queue may still complete, but if they
 do not complete succesfully (no [QACK](#qack) is received) they will not be
 added back to the queue.
@@ -253,46 +356,95 @@ Returns `OK` on success
 
 ### QSTATUS
 
-> QSTATUS [queue ...]
+> QSTATUS [queue ...] [GROUPS group ...]
 
 Get information about the given queues (or all active queues, if none are
-given) on the system.
+given) on the system. An optional set of consumer groups names can be given as
+well to only return information about those particular consumer groups.
 
-An array of arrays will be returned, for example:
+An array structure is returned with the following layout:
+
+* Top-level is an array, one element for each queue requested
+
+* Each element is a two element array, the first is the queue name, the second
+  is a map (array of key/value pairs)
+
+* For the map, the keys are consumer group names, and the values are a map of
+  statistics, which are yet another map (array of key/value pairs)
 
 ```
 > QSTATUS foo bar
 < 1) 1) "foo"
-     2) (integer) 2
-     3) (integer) 1
-     4) (integer) 3
+     2) 1) "consumerGroup1"
+        2) 1) "total"
+           2) (integer) 5
+           3) "inprogress"
+           4) (integer) 1
+           5) "redo"
+           6) (integer) 2
+           7) "done"
+           8) (integer) 1
+           9) "available"
+           10) (integer) 1
+           11) "consumers"
+           12) 2
+        3) "consumerGroup2"
+        4) 1) "total"
+           2) (integer) 5
+           3) "inprogress"
+           4) (integer) 1
+           5) "redo"
+           6) (integer) 2
+           7) "done"
+           8) (integer) 1
+           9) "available"
+           10) (integer) 1
+           11) "consumers"
+           12) 3
   2) 1) "bar"
-     2) (integer) 43
-     3) (integer) 0
-     4) (integer) 0
+     2) 1) "consumerGroup1"
+        2) 1) "total"
+           2) (integer) 5
+           3) "inprogress"
+           4) (integer) 1
+           5) "redo"
+           6) (integer) 2
+           7) "done"
+           8) (integer) 1
+           9) "available"
+           10) (integer) 1
+           11) "consumers"
+           12) 4
 ```
 
-The integer values returned indicate (respectively):
+The statistic maps each contain these keys/values:
 
-* total - The number of events currently held by bananaq for the queue, both those
-  that are awaiting a consumer and those which are actively held by a consumer
+* total - The total number of non-timed out events currently in that queue (will
+  be the same across all consumer groups for that queue).
 
-* processing - The number of events for the queue which are being actively held
-  by a consumer
+* inprogress - The number of events marked as in-progress (i.e. are awaiting
+  being [QACK'd](#qack)) for this consumer group
 
-* consumers - The number of consumers currently registered for the queue
+* redo - The number of events which were marked as in-progress but were
+  timedout, and so are currently available for consuming again by this
+  consumer group.
 
-The returned order will match the order of the queues given in the call. If no
-queues are given (and so information on all active queues is being returned)
-they will be returned in ascending alphabetical order
+* done - The number of events which are have been consumed and acknowledged
+  successfully by consumers in this consumer group.
+
+* available - The number of events which are available for being consumed by a
+  consumer in this consumer group.
+
+* consumers - The number of consumers currently registered for the queue in this
+  consumer group.
 
 *NOTE that there may in the future be more information returned in the
-sub-arrays returned by this call; do not assume that they will always be of
-length 4*
+statistics maps returned by this call; do not assume that they will always be of
+the given length or order.*
 
 ### QINFO
 
-> QINFO [queue ...]
+> QINFO [queue ...] [GROUPS group ...]
 
 Get human readable information about the given queues (or all active queues,
 if none are given) on the system in a human readable format.
@@ -303,11 +455,12 @@ array of strings, one per queue, each formatted like so:
 
 ```
 > QINFO foo bar
-< 1) "foo  total: 2   processing: 1  consumers: 3"
-  2) "bar  total: 43  processing: 0  consumers: 0"
+< 1) "foo consumerGroup1 total:5 inprogress:1 redo:2 done:1 available:1 consumers:2"
+< 2) "foo consumerGroup2 total:5 inprogress:1 redo:2 done:1 available:1 consumers:2"
+< 3) "bar consumerGroup  total:5 inprogress:1 redo:2 done:1 available:1 consumers:2"
 ```
 
-See QSTATUS for the meaning of `total`, `processing`, and `consumers`
+See QSTATUS for the meaning of the different fields
 
 *NOTE that this output is intended to be read by humans and its format may
 change slightly everytime the command is called. For easily machine readable
