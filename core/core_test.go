@@ -53,22 +53,27 @@ func TestKeys(t *T) {
 	assert.Equal(t, groupName, extractGroupName(key))
 }
 
-func requireNewID(t *T) ID {
-	id, err := NewID()
+func requireNewEvent(t *T) Event {
+	e, err := NewEvent(time.Now().Add(1*time.Minute), testutil.RandStr())
 	require.Nil(t, err)
-	return id
+	return e
 }
 
 func TestGetSetEvent(t *T) {
-	id := requireNewID(t)
 	contents := testutil.RandStr()
+	// This is a terrible hack that we have to do because we're adding 30 to the
+	// expire internally
+	expire := time.Now().Add(-29 * time.Second)
 
-	assert.Nil(t, SetEvent(id, contents, 1))
-	contents2, err := GetEvent(id)
+	e, err := NewEvent(expire, contents)
+	require.Nil(t, err)
+
+	assert.Nil(t, SetEvent(e))
+	e2, err := GetEvent(e.ID)
 	assert.Nil(t, err)
-	assert.Equal(t, contents, contents2)
+	assert.Equal(t, e, e2)
 
 	time.Sleep(1*time.Second + 100*time.Millisecond)
-	_, err = GetEvent(id)
+	_, err = GetEvent(e.ID)
 	assert.Equal(t, ErrNotFound, err)
 }
