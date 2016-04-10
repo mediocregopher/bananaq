@@ -120,34 +120,20 @@ func NewEvent(expire time.Time, contents string) (Event, error) {
 	}, nil
 }
 
-func eventKey(id ID) string {
-	return fmt.Sprintf("event:%f", id)
+func (e Event) key() string {
+	return fmt.Sprintf("event:%d", e.ID)
 }
 
-func queueKey(queueName string, parts ...string) string {
-	return fmt.Sprintf("queue:{%s}:%s", queueName, strings.Join(parts, ":"))
+// TODO don't use JSON
+
+// MarshalBinary implements the encoding.BinaryMarshaler interface
+func (e Event) MarshalBinary() ([]byte, error) {
+	return json.Marshal(e)
 }
 
-func groupKey(queueName, groupName string, parts ...string) string {
-	fullParts := make([]string, 0, len(parts)+1)
-	fullParts = append(fullParts, groupName)
-	fullParts = append(fullParts, parts...)
-	return queueKey(queueName, fullParts...)
-}
-
-func extractQueueName(key string) string {
-	i, j := strings.Index(key, "{"), strings.Index(key, "}")
-	return key[i+1 : j]
-}
-
-func extractGroupName(key string) string {
-	i := strings.Index(key, "}")
-	key = key[i+2:]
-	j := strings.Index(key, ":")
-	if j == -1 {
-		return key
-	}
-	return key[:j]
+// UnmarshalBinary implements the encoding.BinaryUnmarshaler interface
+func (e *Event) UnmarshalBinary(b []byte) error {
+	return json.Unmarshal(b, e)
 }
 
 // SetEvent sets the event with the given id to have the given contents. The
@@ -170,18 +156,18 @@ func SetEvent(e Event) error {
 	`
 
 	// TODO use something better than json. flatbuffers?
-	b, err := json.Marshal(e)
+	b, err := e.MarshalBinary()
 	if err != nil {
 		return err
 	}
 
-	return util.LuaEval(c, lua, 1, eventKey(e.ID), pexpire, b).Err
+	return util.LuaEval(c, lua, 1, e.key(), pexpire, b).Err
 }
 
 // GetEvent returns the event identified by the given id, or ErrNotFound if it's
 // expired or never existed
 func GetEvent(id ID) (Event, error) {
-	r := c.Cmd("GET", eventKey(id))
+	r := c.Cmd("GET", Event{ID: id}.key())
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}
@@ -192,6 +178,90 @@ func GetEvent(id ID) (Event, error) {
 	}
 
 	var e Event
-	err = json.Unmarshal(b, &e)
+	err = e.UnmarshalBinary(b)
 	return e, err
+}
+
+// EventSet describes identifying information for a set of events being stored.
+// EventSets with the same Base will be stored together and can be interacted
+// with transactionally. Subs is used a further set of identifiers for the
+// EventSet
+//
+// All strings in EventSet should be alphanumeric, and none should be empty
+type EventSet struct {
+	Base string
+	Subs []string
+}
+
+func (es EventSet) key() string {
+	return fmt.Sprintf("eventset:{%s}:%s", es.Base, strings.Join(es.Subs, ":"))
+}
+
+func eventSetFromKey(key string) EventSet {
+	var es EventSet
+	i, j := strings.Index(key, "{"), strings.Index(key, "}")
+	es.Base = key[i+1 : j]
+	key = key[j+2:]
+	if key != "" {
+		es.Subs = strings.Split(key, ":")
+	}
+	return es
+}
+
+// Adds the given event to the EventSets in add, and removes it from the ones in
+// remove. All EventSets must have the same Base
+func AddRemove(e Event, add, remove []EventSet) error {
+	// Only certain fields get used here
+	e = Event{
+		ID:     e.ID,
+		Expire: e.Expire,
+	}
+
+	b, err := e.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	keys := make([]string, 0, len(add)+len(remove))
+	for i := range add {
+		keys = append(keys, add[i].key())
+	}
+	for i := range remove {
+		keys = append(keys, remove[i].key())
+	}
+
+	lua := `
+		local numAdd = ARGV[1]
+		local ts = ARGV[2]
+		local e = ARGV[3]
+
+		for i=1,numAdd do
+			redis.call("ZADD", KEYS[i], ts, e)
+		end
+
+		for i=numAdd+1,#KEYS do
+			redis.call("ZREM", KEYS[i], e)
+		end
+	`
+
+	return util.LuaEval(c, lua, len(keys), keys, len(add), e.ID, b).Err
+}
+
+// GetIDRange gets all events within the given ID range. Semantics are the same
+// redis' ZRANGE command, where -1 indicates the last event in the set, -2 the
+// second to last, etc... so to get the full set you would give 0,-1
+func GetIDRange(es EventSet, start, end ID) ([]Event, error) {
+	bb, err := c.Cmd("ZRANGE", es.key(), start, end).ListBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	ee := make([]Event, len(bb))
+	for i := range bb {
+		if err := ee[i].UnmarshalBinary(bb[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	return ee, nil
 }

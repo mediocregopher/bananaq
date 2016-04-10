@@ -36,27 +36,17 @@ func TestNewID(t *T) {
 	}
 }
 
-func TestKeys(t *T) {
-	queueName := testutil.RandStr()
-	groupName := testutil.RandStr()
-
-	key := queueKey(queueName)
-	assert.Equal(t, queueName, extractQueueName(key))
-	key = queueKey(queueName, "foo")
-	assert.Equal(t, queueName, extractQueueName(key))
-
-	key = groupKey(queueName, groupName)
-	assert.Equal(t, queueName, extractQueueName(key))
-	assert.Equal(t, groupName, extractGroupName(key))
-	key = groupKey(queueName, groupName, "foo")
-	assert.Equal(t, queueName, extractQueueName(key))
-	assert.Equal(t, groupName, extractGroupName(key))
-}
-
 func requireNewEvent(t *T) Event {
 	e, err := NewEvent(time.Now().Add(1*time.Minute), testutil.RandStr())
 	require.Nil(t, err)
 	return e
+}
+
+func randEventSet(base string) EventSet {
+	return EventSet{
+		Base: base,
+		Subs: []string{testutil.RandStr()},
+	}
 }
 
 func TestGetSetEvent(t *T) {
@@ -76,4 +66,57 @@ func TestGetSetEvent(t *T) {
 	time.Sleep(1*time.Second + 100*time.Millisecond)
 	_, err = GetEvent(e.ID)
 	assert.Equal(t, ErrNotFound, err)
+}
+
+func TestEventSetKeys(t *T) {
+	ess := []EventSet{
+		{Base: testutil.RandStr(), Subs: nil},
+		{Base: testutil.RandStr(), Subs: []string{testutil.RandStr()}},
+		{Base: testutil.RandStr(), Subs: []string{testutil.RandStr(), testutil.RandStr()}},
+	}
+
+	for _, es := range ess {
+		key := es.key()
+		assert.Equal(t, es, eventSetFromKey(key), "key:%q", key)
+	}
+}
+
+func assertSetEvents(t *T, es EventSet, ee ...Event) {
+	ee2, err := GetIDRange(es, 0, -1)
+	require.Nil(t, err)
+
+	expected := map[ID]bool{}
+	for i := range ee {
+		expected[ee[i].ID] = true
+	}
+
+	found := map[ID]bool{}
+	for i := range ee2 {
+		found[ee2[i].ID] = true
+	}
+
+	assert.Equal(t, expected, found)
+}
+
+func TestAddRemove(t *T) {
+	base := testutil.RandStr()
+	es1, es2, es3 := randEventSet(base), randEventSet(base), randEventSet(base)
+	e1, e2, e3 := requireNewEvent(t), requireNewEvent(t), requireNewEvent(t)
+
+	require.Nil(t, AddRemove(e1, []EventSet{es1, es2}, nil))
+	require.Nil(t, AddRemove(e2, []EventSet{es2, es3}, nil))
+	require.Nil(t, AddRemove(e3, []EventSet{es1, es3}, nil))
+	assertSetEvents(t, es1, e1, e3)
+	assertSetEvents(t, es2, e1, e2)
+	assertSetEvents(t, es3, e2, e3)
+
+	require.Nil(t, AddRemove(e1, []EventSet{es3}, []EventSet{es1, es2}))
+	assertSetEvents(t, es1, e3)
+	assertSetEvents(t, es2, e2)
+	assertSetEvents(t, es3, e1, e2, e3)
+
+	require.Nil(t, AddRemove(e2, nil, []EventSet{es2, es3}))
+	assertSetEvents(t, es1, e3)
+	assertSetEvents(t, es2)
+	assertSetEvents(t, es3, e1, e3)
 }
