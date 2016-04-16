@@ -16,28 +16,40 @@ func init() {
 func TestNewID(t *T) {
 	for i := 0; i < 100; i++ {
 		now := time.Now()
-		nowI := newIDBase(now)
-		id, err := newID(nowI)
+		nowTS := NewTS(now)
+		id, err := newID(nowTS)
 		assert.Nil(t, err)
-		assert.Equal(t, ID(nowI), id)
+		assert.Equal(t, ID(nowTS), id)
 
 		// make sure at least the second precision matches, the actual times
 		// won't match exactly because we truncate to microseconds
-		assert.Equal(t, now.Unix(), id.Time().Unix())
+		assert.Equal(t, now.Unix(), TS(id).Time().Unix())
 
-		id2, err := newID(nowI)
+		id2, err := newID(nowTS)
 		assert.Nil(t, err)
 		assert.True(t, id2 > id, "id2:%s !> id:%s ", id2, id)
 
-		nowI = newIDBase(time.Now())
-		id3, err := newID(nowI)
+		nowTS = NewTS(time.Now())
+		id3, err := newID(nowTS)
 		assert.Nil(t, err)
 		assert.True(t, id3 > id2, "id3:%s !> id2:%s ", id3, id2)
 	}
 }
 
+func requireNewID(t *T) ID {
+	id, err := NewID()
+	require.Nil(t, err)
+	return id
+}
+
 func requireNewEvent(t *T) Event {
 	e, err := NewEvent(time.Now().Add(1*time.Minute), testutil.RandStr())
+	require.Nil(t, err)
+	return e
+}
+
+func requireNewEmptyEvent(t *T) Event {
+	e, err := NewEvent(time.Now().Add(1*time.Minute), "")
 	require.Nil(t, err)
 	return e
 }
@@ -81,6 +93,7 @@ func TestEventSetKeys(t *T) {
 	}
 }
 
+/*
 func assertSetEvents(t *T, es EventSet, ee ...Event) {
 	ee2, err := GetIDRange(es, 0, -1)
 	require.Nil(t, err)
@@ -120,3 +133,4 @@ func TestAddRemove(t *T) {
 	assertSetEvents(t, es2)
 	assertSetEvents(t, es3, e1, e3)
 }
+*/

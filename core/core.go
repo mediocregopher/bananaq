@@ -2,24 +2,44 @@
 // providing an abstraction for the data stored in it
 package core
 
+//go:generate msgp -io=false
+
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/levenlabs/go-llog"
 	"github.com/levenlabs/golib/radixutil"
 	"github.com/mediocregopher/radix.v2/redis"
 	"github.com/mediocregopher/radix.v2/util"
+	"github.com/tinylib/msgp/msgp"
 )
 
 var (
 	c     util.Cmder
 	pkgKV = llog.KV{"pkg": "core"}
+
+	bpool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 0, 10240)
+		},
+	}
 )
+
+func withMarshaled(m msgp.Marshaler, fn func([]byte)) {
+	b := bpool.Get().([]byte)
+	defer bpool.Put(b)
+	bb, err := m.MarshalMsg(b)
+	if err != nil {
+		panic(err)
+	}
+	fn(bb)
+}
 
 // Various errors this package may return
 var (
@@ -41,23 +61,34 @@ func Init(redisAddr string, poolSize int) {
 
 const idKey = "id"
 
+// TS identifies a single point in time as an integer number of microseconds
+type TS uint64
+
+// NewTS returns a TS corresponding to the given Time (though it may be
+// truncated in precision by some small amount).
+func NewTS(t time.Time) TS {
+	// We unfortunately are stuck using microseconds because lua gets kind of
+	// weird at bigger numbers in converting to/from strings
+	// TODO we could use msgp instead when interacting with redis
+	return TS(t.UnixNano() / 1e3)
+}
+
+// Time returns the Time object this TS corresponds to
+func (ts TS) Time() time.Time {
+	return time.Unix(0, int64(ts)*1e3)
+}
+
 // ID identifies a single event across the entire cluster, and is unique for all
 // time
-type ID int64
+type ID TS
 
 // NewID returns a new, unique ID which can be used for a new event
 func NewID() (ID, error) {
-	return newID(newIDBase(time.Now()))
-}
-
-func newIDBase(now time.Time) int64 {
-	// We unfortunately are stuck using microseconds because lua gets kind of
-	// weird at bigger numbers in converting to/from strings
-	return now.UnixNano() / 1e3
+	return newID(NewTS(time.Now()))
 }
 
 // We split this out to make testing easier
-func newID(now int64) (ID, error) {
+func newID(now TS) (ID, error) {
 	lua := `
 		local key = KEYS[1]
 		local nowStr = ARGV[1]
@@ -92,16 +123,11 @@ func newID(now int64) (ID, error) {
 	return ID(i), err
 }
 
-// Time returns a time object which corresponds with when the id was created
-func (id ID) Time() time.Time {
-	return time.Unix(0, int64(id)*1e3)
-}
-
 // Event describes all the information related to a single event. An event is
 // immutable, nothing in this struct will ever change
 type Event struct {
 	ID       ID
-	Expire   time.Time
+	Expire   TS
 	Contents string
 }
 
@@ -115,7 +141,7 @@ func NewEvent(expire time.Time, contents string) (Event, error) {
 
 	return Event{
 		ID:       id,
-		Expire:   expire,
+		Expire:   NewTS(expire),
 		Contents: contents,
 	}, nil
 }
@@ -140,7 +166,7 @@ func (e *Event) UnmarshalBinary(b []byte) error {
 // event will expire after the given timeout (which will be truncated to an
 // integer)
 func SetEvent(e Event) error {
-	pexpire := e.Expire.UnixNano() / 1e6 // to milliseconds
+	pexpire := e.Expire.Time().UnixNano() / 1e6 // to milliseconds
 	// We add 30 seconds to the expire so that the event key is still around for
 	// a little while after it's been removed from any queues. This is kind of
 	// ghetto
@@ -182,10 +208,17 @@ func GetEvent(id ID) (Event, error) {
 	return e, err
 }
 
+// Events is a wrapper around a slice of Event structs, useful for MessagePack
+// encoding/decoding
+type Events struct {
+	Events []Event
+}
+
 // EventSet describes identifying information for a set of events being stored.
 // EventSets with the same Base will be stored together and can be interacted
 // with transactionally. Subs is used a further set of identifiers for the
-// EventSet
+// EventSet. EventSets don't actually store the Contents of an Event, but they
+// do contain all other fields of an Event.
 //
 // All strings in EventSet should be alphanumeric, and none should be empty
 type EventSet struct {
@@ -193,8 +226,13 @@ type EventSet struct {
 	Subs []string
 }
 
+// If this changes remember to change it in Query as well
 func (es EventSet) key() string {
-	return fmt.Sprintf("eventset:{%s}:%s", es.Base, strings.Join(es.Subs, ":"))
+	if len(es.Subs) > 0 {
+		return fmt.Sprintf("eventset:{%s}:%s", es.Base, strings.Join(es.Subs, ":"))
+	} else {
+		return fmt.Sprintf("eventset:{%s}", es.Base)
+	}
 }
 
 func eventSetFromKey(key string) EventSet {
@@ -208,6 +246,7 @@ func eventSetFromKey(key string) EventSet {
 	return es
 }
 
+/*
 // Adds the given event to the EventSets in add, and removes it from the ones in
 // remove. All EventSets must have the same Base
 func AddRemove(e Event, add, remove []EventSet) error {
@@ -265,3 +304,4 @@ func GetIDRange(es EventSet, start, end ID) ([]Event, error) {
 
 	return ee, nil
 }
+*/

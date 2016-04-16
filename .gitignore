@@ -1,4 +1,5 @@
-.goat
 *.test
 *.prof
-okq
+*_gen.go
+*_gen_test.go
+*_lua.go
