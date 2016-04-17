@@ -30,14 +30,24 @@ var (
 	}
 )
 
-func withMarshaled(m msgp.Marshaler, fn func([]byte)) {
+// Cleverly marshal multiple things into a single byte buffer. All the []bytes
+// that get put in bb and passed to the callback are actually pointers into the
+// same buffer, which gets expanded and put back in the pool.
+func withMarshaled(fn func([][]byte), mm ...msgp.Marshaler) {
 	b := bpool.Get().([]byte)
-	defer bpool.Put(b)
-	bb, err := m.MarshalMsg(b)
-	if err != nil {
-		panic(err)
+	bb := make([][]byte, len(mm))
+	var err error
+	for i := range mm {
+		// at this point len(b) is always 0
+		b, err = mm[i].MarshalMsg(b)
+		if err != nil {
+			panic(err)
+		}
+		bb[i] = b
+		b = b[len(b):]
 	}
 	fn(bb)
+	bpool.Put(b[:0])
 }
 
 // Various errors this package may return
@@ -116,9 +126,10 @@ func newID(now TS) (ID, error) {
 
 	var ib []byte
 	var err error
-	withMarshaled(now, func(nowb []byte) {
+	withMarshaled(func(bb [][]byte) {
+		nowb := bb[0]
 		ib, err = util.LuaEval(c, lua, 1, idKey, nowb).Bytes()
-	})
+	}, now)
 
 	var id ID
 	_, err = id.UnmarshalMsg(ib)
@@ -172,9 +183,10 @@ func SetEvent(e Event) error {
 	`
 
 	var err error
-	withMarshaled(e, func(eb []byte) {
+	withMarshaled(func(bb [][]byte) {
+		eb := bb[0]
 		err = util.LuaEval(c, lua, 1, e.key(), pexpire, eb).Err
-	})
+	}, e)
 	return err
 }
 
@@ -318,9 +330,11 @@ type QueryAction struct {
 func Query(qa QueryAction) ([]Event, error) {
 	var b []byte
 	var err error
-	withMarshaled(&qa, func(qab []byte) {
-		b, err = util.LuaEval(c, string(queryLua), 1, qa.EventSet.key(), NewTS(time.Now()), qab).Bytes()
-	})
+	withMarshaled(func(bb [][]byte) {
+		nowb := bb[0]
+		qab := bb[1]
+		b, err = util.LuaEval(c, string(queryLua), 1, qa.EventSet.key(), nowb, qab).Bytes()
+	}, NewTS(time.Now()), &qa)
 	if err != nil {
 		return nil, err
 	}

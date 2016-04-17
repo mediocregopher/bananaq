@@ -1,4 +1,4 @@
-local nowTS = tonumber(ARGV[1])
+local nowTS = cmsgpack.unpack(ARGV[1])
 
 local function debug(wat)
     redis.call("SET", "debug", cjson.encode(wat))
