@@ -2,6 +2,7 @@ package core
 
 import (
 	. "testing"
+	"time"
 
 	"github.com/levenlabs/golib/testutil"
 	"github.com/stretchr/testify/assert"
@@ -31,7 +32,7 @@ func populatedEventSet(t *T, base string, ee ...Event) EventSet {
 		},
 		AddTo: []EventSet{es},
 	})
-	require.Nil(t, err)
+	require.Nil(t, err, "%s", err)
 	return es
 }
 
@@ -129,6 +130,117 @@ func TestQueryRangeSelect(t *T) {
 	})
 	require.Nil(t, err)
 	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+}
+
+// Tests PosRangeSelect
+func TestQueryPosRangeSelect(t *T) {
+	base := testutil.RandStr()
+	es, ee := randPopulatedEventSet(t, base, 4)
+
+	ee2, err := Query(QueryAction{
+		QuerySelector: QuerySelector{
+			EventSet:       es,
+			PosRangeSelect: []int64{1, -2},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+}
+
+// Tests Newest
+func TestQueryNewest(t *T) {
+	base := testutil.RandStr()
+	es, ee := randPopulatedEventSet(t, base, 4)
+
+	ee2, err := Query(QueryAction{
+		QuerySelector: QuerySelector{
+			EventSet: es,
+			Newest: []QuerySelector{
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{5, 6}, // should be empty
+				},
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{0, 1},
+				},
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{5, 6}, // should be empty
+				},
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{1, 2},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+}
+
+// Tests FirstNotEmpty
+func TestQueryFirstNotEmpty(t *T) {
+	base := testutil.RandStr()
+	es, ee := randPopulatedEventSet(t, base, 4)
+
+	ee2, err := Query(QueryAction{
+		QuerySelector: QuerySelector{
+			EventSet: es,
+			FirstNotEmpty: []QuerySelector{
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{5, 6}, // should be empty
+				},
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{0, 1},
+				},
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{5, 6}, // should be empty
+				},
+				{
+					EventSet:       es,
+					PosRangeSelect: []int64{1, 2},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[0], ee[1]}, ee2)
+}
+
+// Tests that expired events don't get returned, unless FilterNotExpired is true
+func TestQueryFiltering(t *T) {
+	es := randEventSet(testutil.RandStr())
+	ee := []Event{
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+	}
+	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
+
+	ee2, err := Query(QueryAction{
+		QuerySelector: QuerySelector{
+			EventSet: es,
+			Events:   ee,
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[0], ee[2]}, ee2)
+
+	ee2, err = Query(QueryAction{
+		QuerySelector: QuerySelector{
+			EventSet:         es,
+			Events:           ee,
+			FilterNotExpired: true,
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[1], ee[3]}, ee2)
 }
 
 // Tests Events in QuerySelect

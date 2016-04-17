@@ -1,3 +1,5 @@
+local nowTS = tonumber(ARGV[1])
+
 local function debug(wat)
     redis.call("SET", "debug", cjson.encode(wat))
 end
@@ -34,7 +36,13 @@ local function formatQEMinMax(m, excl, inf)
     return mm
 end
 
-local function query_select(qs)
+-- predefined this because it and query_select_inner call each other recursively
+local query_select
+
+-- Does the actual work of doing the query selection. Returns a result set, and
+-- a boolean indicating if the result set needs expanding. Should only be called
+-- by query_select
+local function query_select_inner(qs)
     local esKey = eventSetKey(qs.EventSet)
     if qs.QueryEventRangeSelect then
         local qe = qs.QueryEventRangeSelect
@@ -55,26 +63,60 @@ local function query_select(qs)
         end
         local max = formatQEMinMax(qe.Max, qe.MaxExcl, "+inf")
 
-        local ee
         if qe.Limit ~= 0 then
-            ee = redis.call("ZRANGEBYSCORE", esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
+            return redis.call("ZRANGEBYSCORE", esKey, min, max, "LIMIT", qe.Offset, qe.Limit), true
         else
-            ee = redis.call("ZRANGEBYSCORE", esKey, min, max)
+            return redis.call("ZRANGEBYSCORE", esKey, min, max), true
         end
-        for i = 1,#ee do
-            ee[i] = expandEvent(ee[i])
+
+    elseif #qs.PosRangeSelect > 0 then
+        local pr = qs.PosRangeSelect
+        return redis.call("ZRANGE", esKey, pr[1], pr[2]), true
+
+    elseif #qs.Newest > 0 then
+        local n = qs.Newest
+        local newest_set = {}
+        for i = 1,#n do
+            local rs = query_select(n[i])
+            if #rs > 0 then
+                if #newest_set == 0 then
+                    newest_set = rs
+                elseif #rs > 0 and newest_set[#newest_set].ID < rs[#rs].ID then
+                    newest_set = rs
+                end
+            end
         end
-        return ee
+        return newest_set, false
+
+    elseif #qs.FirstNotEmpty > 0 then
+        local fn = qs.FirstNotEmpty
+        for i = 1,#fn do
+            local rs = query_select(fn[i])
+            if #rs > 0 then return rs, false end
+        end
+        return {}
 
     elseif qs.Events then
-        for i = 1,#qs.Events do
-            qs.Events[i] = expandEvent(qs.Events[i])
-        end
-        return qs.Events
+        return qs.Events, true
     end
 end
 
-local qa = cmsgpack.unpack(ARGV[1])
+-- Does a selection, always returns and expanded result set
+query_select = function(qs)
+    local rs, expand = query_select_inner(qs)
+    local rs_filtered = {}
+    for i = 1,#rs do
+        local rsi = rs[i]
+        if expand then rsi = expandEvent(rsi) end
+        -- ~= is not equals, which is synonomous with xor
+        if (rsi.Expire > nowTS ~= qs.FilterNotExpired) then
+            table.insert(rs_filtered, rsi)
+        end
+    end
+    return rs_filtered
+end
+
+local qa = cmsgpack.unpack(ARGV[2])
 local result_set = query_select(qa.QuerySelector)
 
 for i = 1, #qa.AddTo do

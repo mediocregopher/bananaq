@@ -1,6 +1,10 @@
 package core
 
-import "github.com/mediocregopher/radix.v2/util"
+import (
+	"time"
+
+	"github.com/mediocregopher/radix.v2/util"
+)
 
 //go:generate msgp -io=false
 //go:generate varembed -pkg core -in query.lua -out query_lua.go -varname queryLua
@@ -48,10 +52,10 @@ type QuerySelector struct {
 	// See QueryEventRangeSelect doc string
 	*QueryEventRangeSelect
 
-	// Select Events by their position with the EventSet. 0 is the oldest
-	// id, 1 is the second oldest, etc... -1 is the youngest, -2 the second
-	// youngest, etc...
-	PosRangeSelect [2]int64
+	// Select Events by their position with the EventSet, using two element
+	// slice. 0 is the oldest id, 1 is the second oldest, etc... -1 is the
+	// youngest, -2 the second youngest, etc...
+	PosRangeSelect []int64
 
 	// Performs all the given selectors, and picks the one whose resulting set
 	// has the newest Event in it. That resulting set becomes the resulting set
@@ -86,7 +90,7 @@ func Query(qa QueryAction) ([]Event, error) {
 	var b []byte
 	var err error
 	withMarshaled(&qa, func(qab []byte) {
-		b, err = util.LuaEval(c, string(queryLua), 1, qa.EventSet.key(), qab).Bytes()
+		b, err = util.LuaEval(c, string(queryLua), 1, qa.EventSet.key(), NewTS(time.Now()), qab).Bytes()
 	})
 	if err != nil {
 		return nil, err
