@@ -6,10 +6,8 @@ package core
 //go:generate varembed -pkg core -in query.lua -out query_lua.go -varname queryLua
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,9 +66,11 @@ type TS uint64
 // NewTS returns a TS corresponding to the given Time (though it may be
 // truncated in precision by some small amount).
 func NewTS(t time.Time) TS {
-	// We unfortunately are stuck using microseconds because lua gets kind of
-	// weird at bigger numbers in converting to/from strings
-	// TODO we could use msgp instead when interacting with redis
+	// We unfortunately are stuck using microseconds because redis' builtin lua
+	// doesn't handle integers with more than 52-bit precision (supposedly, even
+	// though microseconds are more than 52 bits,  but the tests pass so ship
+	// it). There is a newer lua which does properly handle this, but redis
+	// doesn't use it yet
 	return TS(t.UnixNano() / 1e3)
 }
 
@@ -92,36 +92,37 @@ func NewID() (ID, error) {
 func newID(now TS) (ID, error) {
 	lua := `
 		local key = KEYS[1]
-		local nowStr = ARGV[1]
-		local lastStr = redis.call("GET", key)
+		local now_raw = ARGV[1]
+		local now = cmsgpack.unpack(now_raw)
+		local last_raw = redis.call("GET", key)
 
-		local now  = tonumber(nowStr, 10)
-		local last = tonumber(lastStr, 10)
-
-		if not lastStr or not last then
-			redis.call("SET", key, nowStr)
-			return nowStr
+		if not last_raw then
+			redis.call("SET", key, now_raw)
+			return now_raw
 		end
 
+		local last = cmsgpack.unpack(last_raw)
 		if last < now then
-			redis.call("SET", key, nowStr)
-			return nowStr
+			redis.call("SET", key, now_raw)
+			return now_raw
 		end
 
 		-- Add a microsecond and use that
 		last = last + 1
-		lastStr = string.format("%.0f", last)
-		redis.call("SET", key, lastStr)
-		return lastStr
+		last_raw = cmsgpack.pack(last)
+		redis.call("SET", key, last_raw)
+		return last_raw
 	`
 
-	iStr, err := util.LuaEval(c, lua, 1, idKey, now).Str()
-	if err != nil {
-		return 0, err
-	}
+	var ib []byte
+	var err error
+	withMarshaled(now, func(nowb []byte) {
+		ib, err = util.LuaEval(c, lua, 1, idKey, nowb).Bytes()
+	})
 
-	i, err := strconv.ParseInt(iStr, 10, 64)
-	return ID(i), err
+	var id ID
+	_, err = id.UnmarshalMsg(ib)
+	return id, err
 }
 
 // Event describes all the information related to a single event. An event is
@@ -151,18 +152,6 @@ func (e Event) key() string {
 	return fmt.Sprintf("event:%d", e.ID)
 }
 
-// TODO don't use JSON
-
-// MarshalBinary implements the encoding.BinaryMarshaler interface
-func (e Event) MarshalBinary() ([]byte, error) {
-	return json.Marshal(e)
-}
-
-// UnmarshalBinary implements the encoding.BinaryUnmarshaler interface
-func (e *Event) UnmarshalBinary(b []byte) error {
-	return json.Unmarshal(b, e)
-}
-
 // SetEvent sets the event with the given id to have the given contents. The
 // event will expire after the given timeout (which will be truncated to an
 // integer)
@@ -182,13 +171,11 @@ func SetEvent(e Event) error {
 		redis.call("PEXPIREAT", key, pexpire)
 	`
 
-	// TODO use something better than json. flatbuffers?
-	b, err := e.MarshalBinary()
-	if err != nil {
-		return err
-	}
-
-	return util.LuaEval(c, lua, 1, e.key(), pexpire, b).Err
+	var err error
+	withMarshaled(e, func(eb []byte) {
+		err = util.LuaEval(c, lua, 1, e.key(), pexpire, eb).Err
+	})
+	return err
 }
 
 // GetEvent returns the event identified by the given id, or ErrNotFound if it's
@@ -199,13 +186,13 @@ func GetEvent(id ID) (Event, error) {
 		return Event{}, ErrNotFound
 	}
 
-	b, err := r.Bytes()
+	eb, err := r.Bytes()
 	if err != nil {
 		return Event{}, err
 	}
 
 	var e Event
-	err = e.UnmarshalBinary(b)
+	_, err = e.UnmarshalMsg(eb)
 	return e, err
 }
 
@@ -316,8 +303,9 @@ type QuerySelector struct {
 }
 
 // QueryActions describes what to actually do with the results of a
-// QuerySelector. The QuerySelector field must be filled in, as well as one or
-// more of the other fields.
+// QuerySelector. The QuerySelector field must be filled in. AddTo and
+// RemoveFrom may be used to add/remove the result set of the QuerySelector to
+// other EventSets
 type QueryAction struct {
 	QuerySelector
 
@@ -325,6 +313,8 @@ type QueryAction struct {
 	RemoveFrom []EventSet
 }
 
+// Query performs the given QueryAction, which must have a QuerySelector on it.
+// Whatever the final resulting set from the QuerySelector is is returned.
 func Query(qa QueryAction) ([]Event, error) {
 	var b []byte
 	var err error

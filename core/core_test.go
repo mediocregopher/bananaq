@@ -27,12 +27,12 @@ func TestNewID(t *T) {
 
 		id2, err := newID(nowTS)
 		assert.Nil(t, err)
-		assert.True(t, id2 > id, "id2:%s !> id:%s ", id2, id)
+		assert.True(t, id2 > id, "id2:%d !> id:%d ", id2, id)
 
 		nowTS = NewTS(time.Now())
 		id3, err := newID(nowTS)
 		assert.Nil(t, err)
-		assert.True(t, id3 > id2, "id3:%s !> id2:%s ", id3, id2)
+		assert.True(t, id3 > id2, "id3:%d !> id2:%d ", id3, id2)
 	}
 }
 
