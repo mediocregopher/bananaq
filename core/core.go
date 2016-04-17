@@ -164,16 +164,10 @@ func (e Event) key() string {
 }
 
 // SetEvent sets the event with the given id to have the given contents. The
-// event will expire after the given timeout (which will be truncated to an
-// integer)
-func SetEvent(e Event) error {
-	pexpire := e.Expire.Time().UnixNano() / 1e6 // to milliseconds
-	// We add 30 seconds to the expire so that the event key is still around for
-	// a little while after it's been removed from any queues. This is kind of
-	// ghetto
-	// TODO maybe don't do this here somehow, it complects this package with the
-	// actual bananaq application. It also makes testing kind of annoying
-	pexpire += 30000
+// event will expire based on the Expire field in it (which will be truncated to
+// an integer) added with the given buffer
+func SetEvent(e Event, expireBuffer time.Duration) error {
+	pexpire := e.Expire.Time().Add(expireBuffer).UnixNano() / 1e6 // to milliseconds
 	lua := `
 		local key = KEYS[1]
 		local pexpire = ARGV[1]

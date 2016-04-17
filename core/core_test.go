@@ -99,14 +99,12 @@ func assertEventSet(t *T, es EventSet, ee ...Event) {
 
 func TestGetSetEvent(t *T) {
 	contents := testutil.RandStr()
-	// This is a terrible hack that we have to do because we're adding 30 to the
-	// expire internally
-	expire := time.Now().Add(-29 * time.Second)
+	expire := time.Now().Add(500 * time.Millisecond)
 
 	e, err := NewEvent(expire, contents)
 	require.Nil(t, err)
 
-	assert.Nil(t, SetEvent(e))
+	assert.Nil(t, SetEvent(e, 500*time.Millisecond))
 	e2, err := GetEvent(e.ID)
 	assert.Nil(t, err)
 	assert.Equal(t, e, e2)
