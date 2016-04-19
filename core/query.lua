@@ -14,16 +14,19 @@ local function eventSetKey(es)
 end
 
 local function expandEvent(e)
+    local ee
     if e.ID and e.packed then
-        return e
+        ee = e
     elseif e.ID then
         e.packed = cmsgpack.pack(e)
-        return e
+        ee = e
     else
-        local ee = cmsgpack.unpack(e)
+        ee = cmsgpack.unpack(e)
         ee.packed = e
-        return ee
     end
+
+    ee.Contents = nil
+    return ee
 end
 
 local function formatQEMinMax(m, excl, inf)

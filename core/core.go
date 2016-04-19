@@ -1,5 +1,8 @@
 // Package core is responsible for actually communicating with redis and
 // providing an abstraction for the data stored in it
+//
+// This package is not stable! At present it is only intended to be used by
+// other components in bananaq
 package core
 
 //go:generate msgp -io=false
