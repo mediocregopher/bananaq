@@ -336,6 +336,9 @@ type QueryAction struct {
 	// Filters Events out of the input. See its doc string for more info
 	*QueryFilter
 
+	// Stops the pipeline of QueryActions and returns the previous output
+	Break bool
+
 	// May be set alongside any of the other fields on this struct. See its doc
 	// string for more info
 	QueryConditional

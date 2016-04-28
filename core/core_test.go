@@ -455,3 +455,57 @@ func TestQueryUnion(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, eeU, ee2)
 }
+
+func TestQueryBreak(t *T) {
+	base := testutil.RandStr()
+	es := randEventSet(base)
+	eeA := []Event{requireNewEmptyEvent(t)}
+	eeB := []Event{requireNewEmptyEvent(t)}
+
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeA,
+				},
+			},
+			{
+				Break: true,
+			},
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeB,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, eeA, ee2)
+
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeA,
+				},
+			},
+			{
+				Break:            true,
+				QueryConditional: QueryConditional{IfNoInput: true},
+			},
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeB,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, eeB, ee2)
+}

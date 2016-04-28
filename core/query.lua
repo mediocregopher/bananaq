@@ -131,10 +131,10 @@ local function query_filter(input, qf)
 end
 
 local function query_action(input, qa)
-    if qa.QueryConditional.IfNoInput and #input > 0 then return input end
-    if qa.QueryConditional.IfInput and #input == 0 then return input end
+    if qa.QueryConditional.IfNoInput and #input > 0 then return input, true end
+    if qa.QueryConditional.IfInput and #input == 0 then return input, true end
 
-    if qa.QuerySelector then return query_select(input, qa.QuerySelector) end
+    if qa.QuerySelector then return query_select(input, qa.QuerySelector), false end
 
     if #qa.AddTo > 0 then
         for i = 1, #qa.AddTo do
@@ -143,7 +143,7 @@ local function query_action(input, qa)
                 redis.call("ZADD", esKey, input[i].ID, input[i].packed)
             end
         end
-        return input
+        return input, false
     end
 
     if #qa.RemoveFrom > 0 then
@@ -153,19 +153,21 @@ local function query_action(input, qa)
                 redis.call("ZREM", esKey, input[i].packed)
             end
         end
-        return input
+        return input, false
     end
 
-    if #qa.QueryFilter then return query_filter(input, qa.QueryFilter) end
+    if qa.QueryFilter then return query_filter(input, qa.QueryFilter), false end
 
     -- Shouldn't really get here but whatever
-    return input
+    return input, false
 end
 
 local qas = cmsgpack.unpack(ARGV[2])
 local ee = {}
+local skipped
 for i = 1,#qas.QueryActions do
-    ee = query_action(ee, qas.QueryActions[i])
+    ee, skipped = query_action(ee, qas.QueryActions[i])
+    if not skipped and qas.QueryActions[i].Break then break end
 end
 
 for i = 1,#ee do
