@@ -68,12 +68,16 @@ func randEventSet(base string) EventSet {
 
 func populatedEventSet(t *T, base string, ee ...Event) EventSet {
 	es := randEventSet(base)
-	_, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			Events:   ee,
+	_, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{Events: ee},
+			},
+			{
+				AddTo: []EventSet{es},
+			},
 		},
-		AddTo: []EventSet{es},
 	})
 	require.Nil(t, err, "%s", err)
 	return es
@@ -89,12 +93,17 @@ func randPopulatedEventSet(t *T, base string, size int) (EventSet, []Event) {
 }
 
 func assertEventSet(t *T, es EventSet, ee ...Event) {
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			QueryEventRangeSelect: &QueryEventRangeSelect{
-				Min: 0,
-				Max: 0,
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						Min: 0,
+						Max: 0,
+					},
+				},
 			},
 		},
 	})
@@ -139,59 +148,81 @@ func TestQueryBasicAddRemove(t *T) {
 	es, ee := randPopulatedEventSet(t, base, 3)
 	assertEventSet(t, es, ee...)
 
-	_, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			Events: []Event{
-				ee[1],
+	_, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events: []Event{
+						ee[1],
+					},
+				},
+			},
+			{
+				RemoveFrom: []EventSet{es},
 			},
 		},
-		RemoveFrom: []EventSet{es},
 	})
 	require.Nil(t, err)
 	assertEventSet(t, es, ee[0], ee[2])
 }
 
 // Tests normal Min/Max, MinExcl and MaxExcl, Limit/Offset, and
-// MinQuerySelector/MaxQuerySelector in QueryEventRangeSelect
+// MinFromInput/MaxFromInput in QueryEventRangeSelect
 func TestQueryRangeSelect(t *T) {
 	base := testutil.RandStr()
 	es, ee := randPopulatedEventSet(t, base, 4)
 
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			QueryEventRangeSelect: &QueryEventRangeSelect{
-				Min: ee[1].ID,
-				Max: ee[2].ID,
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						Min: ee[1].ID,
+						Max: ee[2].ID,
+					},
+				},
 			},
 		},
 	})
 	require.Nil(t, err)
 	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
 
-	ee2, err = testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			QueryEventRangeSelect: &QueryEventRangeSelect{
-				Min:     ee[0].ID,
-				MinExcl: true,
-				Max:     ee[3].ID,
-				MaxExcl: true,
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						Min:     ee[0].ID,
+						MinExcl: true,
+						Max:     ee[3].ID,
+						MaxExcl: true,
+					},
+				},
 			},
 		},
 	})
 	require.Nil(t, err)
 	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
 
-	ee2, err = testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			QueryEventRangeSelect: &QueryEventRangeSelect{
-				Min:    ee[0].ID,
-				Max:    ee[3].ID,
-				Offset: 1,
-				Limit:  2,
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						Min:    ee[0].ID,
+						Max:    ee[3].ID,
+						Offset: 1,
+						Limit:  2,
+					},
+				},
 			},
 		},
 	})
@@ -200,23 +231,49 @@ func TestQueryRangeSelect(t *T) {
 
 	minES := populatedEventSet(t, base, ee[0], ee[1])
 	maxES := populatedEventSet(t, base, ee[2], ee[3])
-	ee2, err = testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			QueryEventRangeSelect: &QueryEventRangeSelect{
-				MinQuerySelector: &QuerySelector{
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
 					EventSet:              minES,
 					QueryEventRangeSelect: &QueryEventRangeSelect{},
 				},
-				MaxQuerySelector: &QuerySelector{
-					EventSet:              maxES,
-					QueryEventRangeSelect: &QueryEventRangeSelect{},
+			},
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						MinFromInput: true,
+					},
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+	assert.Equal(t, []Event{ee[1], ee[2], ee[3]}, ee2)
+
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet:              maxES,
+					QueryEventRangeSelect: &QueryEventRangeSelect{},
+				},
+			},
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						MaxFromInput: true,
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[0], ee[1], ee[2]}, ee2)
 }
 
 // Tests PosRangeSelect
@@ -224,40 +281,13 @@ func TestQueryPosRangeSelect(t *T) {
 	base := testutil.RandStr()
 	es, ee := randPopulatedEventSet(t, base, 4)
 
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet:       es,
-			PosRangeSelect: []int64{1, -2},
-		},
-	})
-	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
-}
-
-// Tests Newest
-func TestQueryNewest(t *T) {
-	base := testutil.RandStr()
-	es, ee := randPopulatedEventSet(t, base, 4)
-
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			Newest: []QuerySelector{
-				{
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
 					EventSet:       es,
-					PosRangeSelect: []int64{5, 6}, // should be empty
-				},
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{0, 1},
-				},
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{5, 6}, // should be empty
-				},
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{1, 2},
+					PosRangeSelect: []int64{1, -2},
 				},
 			},
 		},
@@ -266,39 +296,7 @@ func TestQueryNewest(t *T) {
 	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
 }
 
-// Tests FirstNotEmpty
-func TestQueryFirstNotEmpty(t *T) {
-	base := testutil.RandStr()
-	es, ee := randPopulatedEventSet(t, base, 4)
-
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			FirstNotEmpty: []QuerySelector{
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{5, 6}, // should be empty
-				},
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{0, 1},
-				},
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{5, 6}, // should be empty
-				},
-				{
-					EventSet:       es,
-					PosRangeSelect: []int64{1, 2},
-				},
-			},
-		},
-	})
-	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[0], ee[1]}, ee2)
-}
-
-// Tests that expired events don't get returned, unless FilterNotExpired is true
+// Tests that expired events don't get returned when filtered. Also tests Invert
 func TestQueryFiltering(t *T) {
 	es := randEventSet(testutil.RandStr())
 	ee := []Event{
@@ -310,20 +308,40 @@ func TestQueryFiltering(t *T) {
 	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
 	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
 
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			Events:   ee,
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   ee,
+				},
+			},
+			{
+				QueryFilter: &QueryFilter{
+					Expired: true,
+				},
+			},
 		},
 	})
 	require.Nil(t, err)
 	assert.Equal(t, []Event{ee[0], ee[2]}, ee2)
 
-	ee2, err = testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet:         es,
-			Events:           ee,
-			FilterNotExpired: true,
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   ee,
+				},
+			},
+			{
+				QueryFilter: &QueryFilter{
+					Expired: true,
+					Invert:  true,
+				},
+			},
 		},
 	})
 	require.Nil(t, err)
@@ -341,10 +359,15 @@ func TestQueryEvents(t *T) {
 		requireNewEmptyEvent(t),
 	}
 
-	ee2, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			Events:   ee,
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   ee,
+				},
+			},
 		},
 	})
 	require.Nil(t, err)
@@ -355,12 +378,80 @@ func TestQueryEvents(t *T) {
 func TestQueryEmpty(t *T) {
 	base := testutil.RandStr()
 	es := randEventSet(base)
-	ee, err := testCore.Query(QueryAction{
-		QuerySelector: QuerySelector{
-			EventSet: es,
-			Events:   []Event{},
+	ee, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   []Event{},
+				},
+			},
 		},
 	})
 	require.Nil(t, err)
 	assert.Equal(t, []Event{}, ee)
+}
+
+func TestQueryUnion(t *T) {
+	base := testutil.RandStr()
+	es := randEventSet(base)
+
+	eeA := []Event{
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+	}
+	eeB := []Event{
+		eeA[0],
+		requireNewEmptyEvent(t),
+	}
+	eeU := []Event{
+		eeA[0],
+		eeA[1],
+		eeB[1],
+	}
+	assert.True(t, eeU[0].ID < eeU[1].ID)
+	assert.True(t, eeU[1].ID < eeU[2].ID)
+
+	// First test that previous output is overwritten without Union
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeA,
+				},
+			},
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeB,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, eeB, ee2)
+
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeA,
+				},
+			},
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					Events:   eeB,
+					Union:    true,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, eeU, ee2)
 }

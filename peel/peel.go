@@ -58,12 +58,19 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 
 	es := queueAvailable(c.Queue)
 
-	qa := core.QueryAction{
-		QuerySelector: core.QuerySelector{
-			EventSet: es,
-			Events:   []core.Event{e},
+	qa := core.QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []core.QueryAction{
+			{
+				QuerySelector: &core.QuerySelector{
+					EventSet: es,
+					Events:   []core.Event{e},
+				},
+			},
+			{
+				AddTo: []core.EventSet{es},
+			},
 		},
-		AddTo: []core.EventSet{es},
 	}
 	if _, err := p.c.Query(qa); err != nil {
 		return 0, err

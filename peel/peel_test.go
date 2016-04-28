@@ -24,10 +24,15 @@ func randClient() Client {
 }
 
 func eventSetElems(t *T, es core.EventSet) []core.Event {
-	qa := core.QueryAction{
-		QuerySelector: core.QuerySelector{
-			EventSet:              es,
-			QueryEventRangeSelect: &core.QueryEventRangeSelect{},
+	qa := core.QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []core.QueryAction{
+			{
+				QuerySelector: &core.QuerySelector{
+					EventSet:              es,
+					QueryEventRangeSelect: &core.QueryEventRangeSelect{},
+				},
+			},
 		},
 	}
 	ee, err := testPeel.c.Query(qa)

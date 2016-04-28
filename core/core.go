@@ -58,7 +58,7 @@ var (
 // redis instances for bananaq. It can be initialized manually or using New. All
 // methods on Core are thread-safe.
 type Core struct {
-	util.Cmder
+	util.Cmder `msg:"-"`
 }
 
 // New initializes a Core struct using the given redis address and pool size.
@@ -180,7 +180,7 @@ func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
 		err = util.LuaEval(c.Cmder, lua, 1, e.key(), pexpire, eb).Err
-	}, e)
+	}, &e)
 	return err
 }
 
@@ -252,15 +252,13 @@ type QueryEventRangeSelect struct {
 	Max              ID
 	MinExcl, MaxExcl bool
 
-	// May be set instead of Min. The newest ID from the result set of
-	// MinQuerySelector will be used as the Min. If the result set of
-	// MinQuerySelector is empty, Min is 0.
-	MinQuerySelector *QuerySelector
+	// May be set instead of Min. The newest ID from the input to this
+	// QueryAction will be used as the Min. If the input is empty, Min will be 0
+	MinFromInput bool
 
-	// May be set instead of Max. The oldest ID from the result set of
-	// MaxQuerySelector will be used as the Max. If the result set of
-	// MaxQuerySelector is empty, Max is 0.
-	MaxQuerySelector *QuerySelector
+	// May be set instead of Max. The oldest ID from the input to this
+	// QueryAction will be used as the Max. If the input is empty, Max will be 0
+	MaxFromInput bool
 
 	// Optional modifiers. If Offset is nonzero, Limit must be nonzero too (it
 	// can be -1 to indicate no limit)
@@ -269,14 +267,7 @@ type QueryEventRangeSelect struct {
 
 // QuerySelector describes a set of criteria for selecting a set of Events from
 // an EventSet. EventSet is a required field, only one field apart from it
-// should be set in this selector (except when indicated on the field comment
-// that the field goes with another field)
-//
-// A QuerySelector always has a "resulting set", i.e. the set of Events which
-// match the selector on the EventSet. The resulting set may be empty. A
-// QuerySelector never modifies anything, it simply retrieves a set of Events
-// (sans their Contents). By default, The resulting set is automatically
-// filtered to only contain Events which haven't yet expired
+// should be set in this selector (unless otherwise noted)
 type QuerySelector struct {
 	EventSet
 
@@ -288,46 +279,92 @@ type QuerySelector struct {
 	// youngest, -2 the second youngest, etc...
 	PosRangeSelect []int64
 
-	// Performs all the given selectors, and picks the one whose resulting set
-	// has the newest Event in it. That resulting set becomes the resulting set
-	// for this selector. If all resulting sets are empty, this selector's
-	// resulting set will be empty
-	Newest []QuerySelector
-
-	// Performs the given selectors one by one, and the first resulting set
-	// which isn't empty becomes the resulting set of this selector
-	FirstNotEmpty []QuerySelector
-
-	// Doesn't actually do a query, the resulting set from this selector will
-	// simply be these events.
+	// Doesn't actually do a query, the output from this selector will simply be
+	// these events.
 	Events []Event
 
-	// If true, only keep the Events in this result set which have expired. This
-	// should be set alongside another field in this struct.
-	FilterNotExpired bool
+	// Must be set alongside another field in this Selector. Indicates that
+	// instead of discarding the output of the previous QueryAction, its output
+	// and the output from this selector should be merged as a union. That union
+	// then becomes the output of this QuerySelector.
+	Union bool
 }
 
-// QueryAction describes what to actually do with the results of a
-// QuerySelector. The QuerySelector field must be filled in. AddTo and
-// RemoveFrom may be used to add/remove the result set of the QuerySelector to
-// other EventSets
+// QueryFilter will apply a filter to its input, only outputting the Events
+// which don't match the filter. Only one filter field should be set per
+// QueryAction
+type QueryFilter struct {
+	// If set, only Events which have not expired will be allowed through
+	Expired bool
+
+	// May be set alongside any other filter field. Will invert the filter, so
+	// that whatever Events would have been allowed through will not be, and
+	// vice-versa
+	Invert bool
+}
+
+// QueryConditional is a field on QueryAction which can affect what the
+// QueryAction does. More than one field may be set on this to have multiple
+// conditionals.
+type QueryConditional struct {
+	// Only do the QueryAction if there is an empty input. Otherwise do no
+	// action and pass the non-empty input through
+	IfNoInput bool
+
+	// Only do the QueryAction if there is non-empty input. Otherwise pass the
+	// empty input through
+	IfInput bool
+}
+
+// QueryAction describes a single action to take on a set of events. Every
+// action has an input and an output, which are both always sorted
+// chronologically. Only one single field, apart from QueryConditional, should
+// be set on a QueryAction.
 type QueryAction struct {
-	QuerySelector
+	// Selects a set of Events using various types of logic. See the doc on
+	// QuerySelector for more. By default, a QuerySelector causes this
+	// QueryAction to simply discard its input and output the QuerySelector's
+	// output.
+	*QuerySelector
 
-	AddTo      []EventSet
+	// Adds the input Events to the given EventSets
+	AddTo []EventSet
+
+	// Removes the input Events from the given EventSets
 	RemoveFrom []EventSet
+
+	// Filters Events out of the input. See its doc string for more info
+	*QueryFilter
+
+	// May be set alongside any of the other fields on this struct. See its doc
+	// string for more info
+	QueryConditional
 }
 
-// Query performs the given QueryAction, which must have a QuerySelector on it.
-// Whatever the final resulting set from the QuerySelector is is returned.
-func (c Core) Query(qa QueryAction) ([]Event, error) {
+// QueryActions are a set of actions to take sequentially. A set of QueryActions
+// effectively amounts to a pipeline of Events. Each QueryAction has the
+// potential to output some set of Events, which become the input for the next
+// QueryAction. The initial set of events is empty, so the first QueryAction
+// should always have a QuerySelector to start things off. The final
+// QueryAction's output will be the output set of Events from the Query method.
+type QueryActions struct {
+	// This must match the Base field on all EventSets being used in this
+	// pipeline
+	EventSetBase string
+	QueryActions []QueryAction
+}
+
+// Query performs the given QueryActions pipeline. Whatever the final output
+// from the pipeline is is returned.
+func (c Core) Query(qas QueryActions) ([]Event, error) {
 	var b []byte
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
-		qab := bb[1]
-		b, err = util.LuaEval(c.Cmder, string(queryLua), 1, qa.EventSet.key(), nowb, qab).Bytes()
-	}, NewTS(time.Now()), &qa)
+		qasb := bb[1]
+		key := EventSet{Base: qas.EventSetBase}.key()
+		b, err = util.LuaEval(c.Cmder, string(queryLua), 1, key, nowb, qasb).Bytes()
+	}, NewTS(time.Now()), &qas)
 	if err != nil {
 		return nil, err
 	}

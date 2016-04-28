@@ -45,101 +45,131 @@ local query_select
 -- Does the actual work of doing the query selection. Returns a result set, and
 -- a boolean indicating if the result set needs expanding. Should only be called
 -- by query_select
-local function query_select_inner(qs)
+local function query_select_inner(input, qs)
     local esKey = eventSetKey(qs.EventSet)
     if qs.QueryEventRangeSelect then
         local qe = qs.QueryEventRangeSelect
 
-        if qe.MinQuerySelector then
-            local minEE = query_select(qe.MinQuerySelector)
-            if #minEE > 0 then
-                qe.Min = minEE[#minEE].ID
-            end
+        if qe.MinFromInput then
+            if #input > 0 then qe.Min = input[#input].ID else qe.Min = 0 end
         end
         local min = formatQEMinMax(qe.Min, qe.MinExcl, "-inf")
 
-        if qe.MaxQuerySelector then
-            local maxEE = query_select(qe.MaxQuerySelector)
-            if #maxEE > 0 then
-                qe.Max = maxEE[1].ID
-            end
+        if qe.MaxFromInput then
+            if #input > 0 then qe.Max = input[1].ID else qe.Max = 0 end
         end
         local max = formatQEMinMax(qe.Max, qe.MaxExcl, "+inf")
 
         if qe.Limit ~= 0 then
-            return redis.call("ZRANGEBYSCORE", esKey, min, max, "LIMIT", qe.Offset, qe.Limit), true
+            return redis.call("ZRANGEBYSCORE", esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
         else
-            return redis.call("ZRANGEBYSCORE", esKey, min, max), true
+            return redis.call("ZRANGEBYSCORE", esKey, min, max)
         end
 
     elseif #qs.PosRangeSelect > 0 then
         local pr = qs.PosRangeSelect
-        return redis.call("ZRANGE", esKey, pr[1], pr[2]), true
-
-    elseif #qs.Newest > 0 then
-        local n = qs.Newest
-        local newest_set = {}
-        for i = 1,#n do
-            local rs = query_select(n[i])
-            if #rs > 0 then
-                if #newest_set == 0 then
-                    newest_set = rs
-                elseif #rs > 0 and newest_set[#newest_set].ID < rs[#rs].ID then
-                    newest_set = rs
-                end
-            end
-        end
-        return newest_set, false
-
-    elseif #qs.FirstNotEmpty > 0 then
-        local fn = qs.FirstNotEmpty
-        for i = 1,#fn do
-            local rs = query_select(fn[i])
-            if #rs > 0 then return rs, false end
-        end
-        return {}
+        return redis.call("ZRANGE", esKey, pr[1], pr[2])
 
     elseif qs.Events then
-        return qs.Events, true
+        return qs.Events
     end
 end
 
--- Does a selection, always returns and expanded result set
-query_select = function(qs)
-    local rs, expand = query_select_inner(qs)
-    local rs_filtered = {}
-    for i = 1,#rs do
-        local rsi = rs[i]
-        if expand then rsi = expandEvent(rsi) end
-        -- ~= is not equals, which is synonomous with xor
-        if (rsi.Expire > nowTS ~= qs.FilterNotExpired) then
-            table.insert(rs_filtered, rsi)
+-- Does a selection, always returns an expanded output. Also handles Union
+-- and other Selector modifiers
+query_select = function(input, qs)
+    local output = query_select_inner(input, qs)
+    for i = 1,#output do
+        output[i] = expandEvent(output[i])
+    end
+
+    if qs.Union then
+        local set = {}
+        for i = 1,#output do
+            set[output[i].ID] = output[i]
+        end
+        for i = 1,#input do
+            set[input[i].ID] = input[i]
+        end
+
+        output = {}
+        for _, e in pairs(set) do
+            table.insert(output, e)
         end
     end
-    return rs_filtered
-end
 
-local qa = cmsgpack.unpack(ARGV[2])
-local result_set = query_select(qa.QuerySelector)
-
-for i = 1, #qa.AddTo do
-    local esKey = eventSetKey(qa.AddTo[i])
-    for i = 1, #result_set do
-        local e = result_set[i]
-        redis.call("ZADD", esKey, e.ID, e.packed)
+    -- We always sort the output by ID. It kind of sucks, but there's no way of
+    -- knowing that the events were stored ordered by ID versus something else,
+    -- and for Union we have to do it anyway
+    local ids = {}
+    local byid = {}
+    for i = 1, #output do
+        table.insert(ids, output[i].ID)
+        byid[output[i].ID] = output[i]
     end
-end
-
-for i = 1, #qa.RemoveFrom do
-    local esKey = eventSetKey(qa.RemoveFrom[i])
-    for i = 1, #result_set do
-        local e = result_set[i]
-        redis.call("ZREM", esKey, e.packed)
+    table.sort(ids)
+    local sorted_output = {}
+    for i = 1, #ids do
+        table.insert(sorted_output, byid[ids[i]])
     end
+    return sorted_output
 end
 
-for i = 1,#result_set do
-    result_set[i].packed = nil
+local function query_filter(input, qf)
+    local output = {}
+    for i = 1, #input do
+        local e = input[i]
+        local filter
+        if qf.Expired then
+            filter = e.Expire <= nowTS
+        end
+        -- ~= is not equals, which is synonomous with xor
+        filter = filter ~= qf.Invert
+        if not filter then table.insert(output, e) end
+    end
+    return output
 end
 
-return cmsgpack.pack({Events = result_set})
+local function query_action(input, qa)
+    if qa.QueryConditional.IfNoInput and #input > 0 then return input end
+    if qa.QueryConditional.IfInput and #input == 0 then return input end
+
+    if qa.QuerySelector then return query_select(input, qa.QuerySelector) end
+
+    if #qa.AddTo > 0 then
+        for i = 1, #qa.AddTo do
+            local esKey = eventSetKey(qa.AddTo[i])
+            for i = 1, #input do
+                redis.call("ZADD", esKey, input[i].ID, input[i].packed)
+            end
+        end
+        return input
+    end
+
+    if #qa.RemoveFrom > 0 then
+        for i = 1, #qa.RemoveFrom do
+            local esKey = eventSetKey(qa.RemoveFrom[i])
+            for i = 1, #input do
+                redis.call("ZREM", esKey, input[i].packed)
+            end
+        end
+        return input
+    end
+
+    if #qa.QueryFilter then return query_filter(input, qa.QueryFilter) end
+
+    -- Shouldn't really get here but whatever
+    return input
+end
+
+local qas = cmsgpack.unpack(ARGV[2])
+local ee = {}
+for i = 1,#qas.QueryActions do
+    ee = query_action(ee, qas.QueryActions[i])
+end
+
+for i = 1,#ee do
+    ee[i].packed = nil
+end
+
+return cmsgpack.pack({Events = ee})
