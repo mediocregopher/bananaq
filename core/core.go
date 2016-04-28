@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/levenlabs/go-llog"
 	"github.com/levenlabs/golib/radixutil"
 	"github.com/mediocregopher/radix.v2/redis"
 	"github.com/mediocregopher/radix.v2/util"
@@ -23,9 +22,6 @@ import (
 )
 
 var (
-	c     util.Cmder
-	pkgKV = llog.KV{"pkg": "core"}
-
 	bpool = sync.Pool{
 		New: func() interface{} {
 			return make([]byte, 0, 10240)
@@ -58,17 +54,18 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
-// Init initializes the core global variables and gets the party started
-func Init(redisAddr string, poolSize int) {
-	pkgKV["redisAddr"] = redisAddr
-	pkgKV["poolSize"] = poolSize
-	llog.Info("initializing core", pkgKV, llog.KV{"havingFun": true})
+// Core contains all the information needed to interact with the underlying
+// redis instances for bananaq. It can be initialized manually or using New. All
+// methods on Core are thread-safe.
+type Core struct {
+	util.Cmder
+}
 
-	var err error
-	c, err = radixutil.DialMaybeCluster("tcp", redisAddr, poolSize)
-	if err != nil {
-		llog.Fatal("could not connect to redis", pkgKV, llog.KV{"err": err})
-	}
+// New initializes a Core struct using the given redis address and pool size.
+// The redis address can be a standalone node or a node in a cluster.
+func New(redisAddr string, poolSize int) (Core, error) {
+	c, err := radixutil.DialMaybeCluster("tcp", redisAddr, poolSize)
+	return Core{c}, err
 }
 
 const idKey = "id"
@@ -97,12 +94,12 @@ func (ts TS) Time() time.Time {
 type ID TS
 
 // NewID returns a new, unique ID which can be used for a new event
-func NewID() (ID, error) {
-	return newID(NewTS(time.Now()))
+func (c Core) NewID() (ID, error) {
+	return c.newID(NewTS(time.Now()))
 }
 
 // We split this out to make testing easier
-func newID(now TS) (ID, error) {
+func (c Core) newID(now TS) (ID, error) {
 	lua := `
 		local key = KEYS[1]
 		local now_raw = ARGV[1]
@@ -131,7 +128,7 @@ func newID(now TS) (ID, error) {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
-		ib, err = util.LuaEval(c, lua, 1, idKey, nowb).Bytes()
+		ib, err = util.LuaEval(c.Cmder, lua, 1, idKey, nowb).Bytes()
 	}, now)
 
 	var id ID
@@ -149,8 +146,8 @@ type Event struct {
 
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
-func NewEvent(expire time.Time, contents string) (Event, error) {
-	id, err := NewID()
+func (c Core) NewEvent(expire time.Time, contents string) (Event, error) {
+	id, err := c.NewID()
 	if err != nil {
 		return Event{}, err
 	}
@@ -169,7 +166,7 @@ func (e Event) key() string {
 // SetEvent sets the event with the given id to have the given contents. The
 // event will expire based on the Expire field in it (which will be truncated to
 // an integer) added with the given buffer
-func SetEvent(e Event, expireBuffer time.Duration) error {
+func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	pexpire := e.Expire.Time().Add(expireBuffer).UnixNano() / 1e6 // to milliseconds
 	lua := `
 		local key = KEYS[1]
@@ -182,14 +179,14 @@ func SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c, lua, 1, e.key(), pexpire, eb).Err
+		err = util.LuaEval(c.Cmder, lua, 1, e.key(), pexpire, eb).Err
 	}, e)
 	return err
 }
 
 // GetEvent returns the event identified by the given id, or ErrNotFound if it's
 // expired or never existed
-func GetEvent(id ID) (Event, error) {
+func (c Core) GetEvent(id ID) (Event, error) {
 	r := c.Cmd("GET", Event{ID: id}.key())
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
@@ -227,9 +224,8 @@ type EventSet struct {
 func (es EventSet) key() string {
 	if len(es.Subs) > 0 {
 		return fmt.Sprintf("eventset:{%s}:%s", es.Base, strings.Join(es.Subs, ":"))
-	} else {
-		return fmt.Sprintf("eventset:{%s}", es.Base)
 	}
+	return fmt.Sprintf("eventset:{%s}", es.Base)
 }
 
 func eventSetFromKey(key string) EventSet {
@@ -311,7 +307,7 @@ type QuerySelector struct {
 	FilterNotExpired bool
 }
 
-// QueryActions describes what to actually do with the results of a
+// QueryAction describes what to actually do with the results of a
 // QuerySelector. The QuerySelector field must be filled in. AddTo and
 // RemoveFrom may be used to add/remove the result set of the QuerySelector to
 // other EventSets
@@ -324,13 +320,13 @@ type QueryAction struct {
 
 // Query performs the given QueryAction, which must have a QuerySelector on it.
 // Whatever the final resulting set from the QuerySelector is is returned.
-func Query(qa QueryAction) ([]Event, error) {
+func (c Core) Query(qa QueryAction) ([]Event, error) {
 	var b []byte
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qab := bb[1]
-		b, err = util.LuaEval(c, string(queryLua), 1, qa.EventSet.key(), nowb, qab).Bytes()
+		b, err = util.LuaEval(c.Cmder, string(queryLua), 1, qa.EventSet.key(), nowb, qab).Bytes()
 	}, NewTS(time.Now()), &qa)
 	if err != nil {
 		return nil, err

@@ -1,4 +1,4 @@
-package dispatch
+package peel
 
 import "github.com/mediocregopher/bananaq/core"
 
