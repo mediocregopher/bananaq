@@ -316,6 +316,14 @@ type QueryConditional struct {
 	IfInput bool
 }
 
+// QueryAddTo adds its input Events to the given EventSets. If Score is given it
+// will be used as the score for all Events being added, otherwise the ID of
+// each individual Event will be used
+type QueryAddTo struct {
+	EventSets []EventSet
+	Score     TS
+}
+
 // QueryAction describes a single action to take on a set of events. Every
 // action has an input and an output, which are both always sorted
 // chronologically. Only one single field, apart from QueryConditional, should
@@ -327,8 +335,9 @@ type QueryAction struct {
 	// output.
 	*QuerySelector
 
-	// Adds the input Events to the given EventSets
-	AddTo []EventSet
+	// Adds the input Events to the given EventSets. See its doc string for more
+	// info
+	*QueryAddTo
 
 	// Removes the input Events from the given EventSets
 	RemoveFrom []EventSet

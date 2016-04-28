@@ -68,7 +68,9 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 				},
 			},
 			{
-				AddTo: []core.EventSet{es},
+				QueryAddTo: &core.QueryAddTo{
+					EventSets: []core.EventSet{es},
+				},
 			},
 		},
 	}

@@ -75,7 +75,9 @@ func populatedEventSet(t *T, base string, ee ...Event) EventSet {
 				QuerySelector: &QuerySelector{Events: ee},
 			},
 			{
-				AddTo: []EventSet{es},
+				QueryAddTo: &QueryAddTo{
+					EventSets: []EventSet{es},
+				},
 			},
 		},
 	})

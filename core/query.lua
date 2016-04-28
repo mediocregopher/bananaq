@@ -136,11 +136,13 @@ local function query_action(input, qa)
 
     if qa.QuerySelector then return query_select(input, qa.QuerySelector), false end
 
-    if #qa.AddTo > 0 then
-        for i = 1, #qa.AddTo do
-            local esKey = eventSetKey(qa.AddTo[i])
+    if qa.QueryAddTo then
+        for i = 1, #qa.QueryAddTo.EventSets do
+            local esKey = eventSetKey(qa.QueryAddTo.EventSets[i])
             for i = 1, #input do
-                redis.call("ZADD", esKey, input[i].ID, input[i].packed)
+                local score = input[i].ID
+                if qa.QueryAddTo.Score > 0 then score = qa.QueryAddTo.Score end
+                redis.call("ZADD", esKey, score, input[i].packed)
             end
         end
         return input, false
