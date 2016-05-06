@@ -16,13 +16,18 @@ func init() {
 	if testCore, err = New("127.0.0.1:6379", 1); err != nil {
 		panic(err)
 	}
+
+	// We set idKey to be random because this package's tests assume they are
+	// the only thing calling NewID. But if tests for other sub-packages in
+	// bananaq are also running they will be calling it too.
+	idKey = idKey + ":" + testutil.RandStr()
 }
 
 func TestNewID(t *T) {
 	for i := 0; i < 100; i++ {
 		now := time.Now()
 		nowTS := NewTS(now)
-		id, err := testCore.newID(nowTS)
+		id, err := testCore.NewID(nowTS)
 		assert.Nil(t, err)
 		assert.Equal(t, ID(nowTS), id)
 
@@ -30,19 +35,19 @@ func TestNewID(t *T) {
 		// won't match exactly because we truncate to microseconds
 		assert.Equal(t, now.Unix(), TS(id).Time().Unix())
 
-		id2, err := testCore.newID(nowTS)
+		id2, err := testCore.NewID(nowTS)
 		assert.Nil(t, err)
 		assert.True(t, id2 > id, "id2:%d !> id:%d ", id2, id)
 
 		nowTS = NewTS(time.Now())
-		id3, err := testCore.newID(nowTS)
+		id3, err := testCore.NewID(nowTS)
 		assert.Nil(t, err)
 		assert.True(t, id3 > id2, "id3:%d !> id2:%d ", id3, id2)
 	}
 }
 
 func requireNewID(t *T) ID {
-	id, err := testCore.NewID()
+	id, err := testCore.NewID(NewTS(time.Now()))
 	require.Nil(t, err)
 	return id
 }
@@ -231,6 +236,25 @@ func TestQueryRangeSelect(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
 
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventRangeSelect: &QueryEventRangeSelect{
+						Min:     ee[1].ID,
+						Max:     ee[2].ID,
+						Reverse: true,
+						Limit:   1,
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[2]}, ee2)
+
 	minES := populatedEventSet(t, base, ee[0], ee[1])
 	maxES := populatedEventSet(t, base, ee[2], ee[3])
 	ee2, err = testCore.Query(QueryActions{
@@ -307,8 +331,8 @@ func TestQueryFiltering(t *T) {
 		requireNewEmptyEvent(t),
 		requireNewEmptyEvent(t),
 	}
-	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
-	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[1].ID = ID(NewTS(time.Now().Add(-1 * time.Second)))
+	ee[3].ID = ID(NewTS(time.Now().Add(-1 * time.Second)))
 
 	ee2, err := testCore.Query(QueryActions{
 		EventSetBase: es.Base,
@@ -510,4 +534,89 @@ func TestQueryBreak(t *T) {
 	})
 	require.Nil(t, err)
 	assert.Equal(t, eeB, ee2)
+}
+
+func TestQueryConditionals(t *T) {
+	base := testutil.RandStr()
+	esFull, _ := randPopulatedEventSet(t, base, 5)
+	esEmpty := randEventSet(base)
+	e := requireNewEmptyEvent(t)
+
+	ee, err := testCore.Query(QueryActions{
+		EventSetBase: base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Events: []Event{e},
+				},
+				QueryConditional: QueryConditional{
+					IfEmpty: &esEmpty,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, e, ee[0])
+
+	ee, err = testCore.Query(QueryActions{
+		EventSetBase: base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Events: []Event{e},
+				},
+				QueryConditional: QueryConditional{
+					IfEmpty: &esFull,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, ee)
+
+	ee, err = testCore.Query(QueryActions{
+		EventSetBase: base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Events: []Event{e},
+				},
+				QueryConditional: QueryConditional{
+					And: []QueryConditional{
+						{
+							IfEmpty: &esEmpty,
+						},
+						{
+							IfNotEmpty: &esFull,
+						},
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, e, ee[0])
+
+	ee, err = testCore.Query(QueryActions{
+		EventSetBase: base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Events: []Event{e},
+				},
+				QueryConditional: QueryConditional{
+					And: []QueryConditional{
+						{
+							IfEmpty: &esEmpty,
+						},
+						{
+							IfEmpty: &esFull,
+						},
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, ee)
 }

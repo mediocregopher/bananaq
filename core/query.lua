@@ -60,10 +60,16 @@ local function query_select_inner(input, qs)
         end
         local max = formatQEMinMax(qe.Max, qe.MaxExcl, "+inf")
 
+        local zrangebyscore = "ZRANGEBYSCORE"
+        if qe.Reverse then
+            zrangebyscore = "ZREVRANGEBYSCORE"
+            min, max = max, min
+        end
+
         if qe.Limit ~= 0 then
-            return redis.call("ZRANGEBYSCORE", esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
+            return redis.call(zrangebyscore, esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
         else
-            return redis.call("ZRANGEBYSCORE", esKey, min, max)
+            return redis.call(zrangebyscore, esKey, min, max)
         end
 
     elseif #qs.PosRangeSelect > 0 then
@@ -121,7 +127,7 @@ local function query_filter(input, qf)
         local e = input[i]
         local filter
         if qf.Expired then
-            filter = e.Expire <= nowTS
+            filter = e.ID <= nowTS
         end
         -- ~= is not equals, which is synonomous with xor
         filter = filter ~= qf.Invert
@@ -130,9 +136,33 @@ local function query_filter(input, qf)
     return output
 end
 
+
+-- Returns true if the conditional succeeds, i.e. the QueryAction should be
+-- performed
+local function query_conditional(input, qc)
+    if qc.And then
+        for i = 1,#qc.And do
+            if not query_conditional(input, qc.And[i]) then return false end
+        end
+    end
+    if qc.IfNoInput and #input > 0 then return false end
+    if qc.IfInput and #input == 0 then return false end
+    if qc.IfEmpty then
+        local key = eventSetKey(qc.IfEmpty)
+        if redis.call("ZCARD", key) > 0 then return false end
+    end
+    if qc.IfNotEmpty then
+        local key = eventSetKey(qc.IfNotEmpty)
+        if redis.call("ZCARD", key) == 0 then return false end
+    end
+    return true
+end
+
+-- performs the QueryAction with the given input set. Returns the new input set,
+-- and whether or not the action was skipped (which it might be if a conditional
+-- stopped it from happening)
 local function query_action(input, qa)
-    if qa.QueryConditional.IfNoInput and #input > 0 then return input, true end
-    if qa.QueryConditional.IfInput and #input == 0 then return input, true end
+    if not query_conditional(input, qa.QueryConditional) then return input, true end
 
     if qa.QuerySelector then return query_select(input, qa.QuerySelector), false end
 

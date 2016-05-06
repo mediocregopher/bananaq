@@ -68,7 +68,9 @@ func New(redisAddr string, poolSize int) (Core, error) {
 	return Core{c}, err
 }
 
-const idKey = "id"
+var idKey = "id"
+
+// TODO TS might not need to be public
 
 // TS identifies a single point in time as an integer number of microseconds
 type TS uint64
@@ -90,16 +92,14 @@ func (ts TS) Time() time.Time {
 }
 
 // ID identifies a single event across the entire cluster, and is unique for all
-// time
+// time. It also represents the point in time at which an event will expire
 type ID TS
 
-// NewID returns a new, unique ID which can be used for a new event
-func (c Core) NewID() (ID, error) {
-	return c.newID(NewTS(time.Now()))
-}
-
-// We split this out to make testing easier
-func (c Core) newID(now TS) (ID, error) {
+// NewID returns a new, unique ID corresponding to the given timestamp, which
+// can be used for a new event. All IDs are monotonically increasing across the
+// entire cluster. Consequently, the ID returned might differ in the time it
+// represents from the given TS by a very small amount.
+func (c Core) NewID(t TS) (ID, error) {
 	lua := `
 		local key = KEYS[1]
 		local now_raw = ARGV[1]
@@ -129,7 +129,7 @@ func (c Core) newID(now TS) (ID, error) {
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		ib, err = util.LuaEval(c.Cmder, lua, 1, idKey, nowb).Bytes()
-	}, now)
+	}, t)
 
 	var id ID
 	_, err = id.UnmarshalMsg(ib)
@@ -140,21 +140,19 @@ func (c Core) newID(now TS) (ID, error) {
 // immutable, nothing in this struct will ever change
 type Event struct {
 	ID       ID
-	Expire   TS
 	Contents string
 }
 
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
 func (c Core) NewEvent(expire time.Time, contents string) (Event, error) {
-	id, err := c.NewID()
+	id, err := c.NewID(NewTS(expire))
 	if err != nil {
 		return Event{}, err
 	}
 
 	return Event{
 		ID:       id,
-		Expire:   NewTS(expire),
 		Contents: contents,
 	}, nil
 }
@@ -164,10 +162,10 @@ func (e Event) key() string {
 }
 
 // SetEvent sets the event with the given id to have the given contents. The
-// event will expire based on the Expire field in it (which will be truncated to
-// an integer) added with the given buffer
+// event will expire based on the ID field in it (which will be truncated to an
+// integer) added with the given buffer
 func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
-	pexpire := e.Expire.Time().Add(expireBuffer).UnixNano() / 1e6 // to milliseconds
+	pexpire := TS(e.ID).Time().Add(expireBuffer).UnixNano() / 1e6 // to milliseconds
 	lua := `
 		local key = KEYS[1]
 		local pexpire = ARGV[1]
@@ -263,6 +261,10 @@ type QueryEventRangeSelect struct {
 	// Optional modifiers. If Offset is nonzero, Limit must be nonzero too (it
 	// can be -1 to indicate no limit)
 	Limit, Offset int64
+
+	// If true, reverses the order that events in the set are processed and
+	// returned. The meanings of Min/Max stay the same though.
+	Reverse bool
 }
 
 // QuerySelector describes a set of criteria for selecting a set of Events from
@@ -307,6 +309,10 @@ type QueryFilter struct {
 // QueryAction does. More than one field may be set on this to have multiple
 // conditionals.
 type QueryConditional struct {
+	// Only do the QueryAction if all of the conditionals in this list return
+	// true
+	And []QueryConditional
+
 	// Only do the QueryAction if there is an empty input. Otherwise do no
 	// action and pass the non-empty input through
 	IfNoInput bool
@@ -314,6 +320,13 @@ type QueryConditional struct {
 	// Only do the QueryAction if there is non-empty input. Otherwise pass the
 	// empty input through
 	IfInput bool
+
+	// Only do the QueryAction if the given EventSet has no events in it
+	IfEmpty *EventSet
+
+	// Only do the QueryAction if the given EventSet has one or more events in
+	// it
+	IfNotEmpty *EventSet
 }
 
 // QueryAddTo adds its input Events to the given EventSets. If Score is given it
