@@ -302,6 +302,61 @@ func TestQueryRangeSelect(t *T) {
 	assert.Equal(t, []Event{ee[0], ee[1], ee[2]}, ee2)
 }
 
+func TestQueryEventScoreSelect(t *T) {
+	base := testutil.RandStr()
+	es, ee := randPopulatedEventSet(t, base, 1)
+
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventScoreSelect: &QueryEventScoreSelect{
+						Event: ee[0],
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[0]}, ee2)
+
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventScoreSelect: &QueryEventScoreSelect{
+						Event: ee[0],
+						Equal: TS(ee[0].ID),
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, []Event{ee[0]}, ee2)
+
+	ee2, err = testCore.Query(QueryActions{
+		EventSetBase: es.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					EventSet: es,
+					QueryEventScoreSelect: &QueryEventScoreSelect{
+						Event: ee[0],
+						Min:   TS(ee[0].ID) + 10,
+					},
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, ee2)
+}
+
 // Tests PosRangeSelect
 func TestQueryPosRangeSelect(t *T) {
 	base := testutil.RandStr()

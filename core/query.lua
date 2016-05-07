@@ -72,6 +72,18 @@ local function query_select_inner(input, qs)
             return redis.call(zrangebyscore, esKey, min, max)
         end
 
+    elseif qs.QueryEventScoreSelect then
+        local qes = qs.QueryEventScoreSelect
+        local e = expandEvent(qes.Event)
+        local scoreRaw = redis.call("ZSCORE", esKey, e.packed)
+        if not scoreRaw then return {} end
+        local score = tonumber(scoreRaw)
+
+        if score < qes.Min then return {} end
+        if qes.Max > 0 and score > qes.Max then return {} end
+        if qes.Equal > 0 and score ~= qes.Equal then return {} end
+        return {e}
+
     elseif #qs.PosRangeSelect > 0 then
         local pr = qs.PosRangeSelect
         return redis.call("ZRANGE", esKey, pr[1], pr[2])

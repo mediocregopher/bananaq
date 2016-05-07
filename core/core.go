@@ -267,6 +267,17 @@ type QueryEventRangeSelect struct {
 	Reverse bool
 }
 
+// QueryEventScoreSelect pulls the given Event from an EventSet. If the Event is
+// not in the EventSet there is no output. If the Event is in the EventSet but
+// its score does not match whatever conditions are set by Min/Max/Equal there
+// is no output. Otherwise the output is the single Event.
+type QueryEventScoreSelect struct {
+	Event Event
+	Min   TS
+	Max   TS
+	Equal TS
+}
+
 // QuerySelector describes a set of criteria for selecting a set of Events from
 // an EventSet. EventSet is a required field, only one field apart from it
 // should be set in this selector (unless otherwise noted)
@@ -275,6 +286,9 @@ type QuerySelector struct {
 
 	// See QueryEventRangeSelect doc string
 	*QueryEventRangeSelect
+
+	// See QueryEventScoreSelect doc string
+	*QueryEventScoreSelect
 
 	// Select Events by their position with the EventSet, using two element
 	// slice. 0 is the oldest id, 1 is the second oldest, etc... -1 is the

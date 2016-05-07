@@ -193,3 +193,46 @@ func TestQGet(t *T) {
 	assertEventSet(t, esDone, ee[2].ID, ee[3].ID, ee[4].ID, ee[5].ID)
 	assertEventSet(t, esRedo) // assert empty
 }
+
+func TestQAck(t *T) {
+	queue, ee := newTestQueue(t, 2)
+	cgroup := testutil.RandStr()
+	esInProgID := queueInProgressByID(queue, cgroup)
+	esInProgAck := queueInProgressByAck(queue, cgroup)
+	esDone := queueDone(queue, cgroup)
+
+	now := time.Now()
+	requireAddToES(t, esInProgID, ee[0], 0)
+	requireAddToES(t, esInProgAck, ee[0], core.NewTS(now.Add(10*time.Millisecond)))
+
+	cmd := QAckCommand{
+		Client:        randClient(),
+		Queue:         queue,
+		ConsumerGroup: cgroup,
+		Event:         ee[0],
+	}
+	acked, err := testPeel.QAck(cmd)
+	require.Nil(t, err)
+	assert.True(t, acked)
+	assertEventSet(t, esInProgID)
+	assertEventSet(t, esInProgAck)
+	assertEventSet(t, esDone, ee[0].ID)
+
+	acked, err = testPeel.QAck(cmd)
+	require.Nil(t, err)
+	assert.False(t, acked)
+	assertEventSet(t, esInProgID)
+	assertEventSet(t, esInProgAck)
+	assertEventSet(t, esDone, ee[0].ID)
+
+	requireAddToES(t, esInProgID, ee[1], 0)
+	requireAddToES(t, esInProgAck, ee[1], core.NewTS(now.Add(-10*time.Millisecond)))
+
+	cmd.Event = ee[1]
+	acked, err = testPeel.QAck(cmd)
+	require.Nil(t, err)
+	assert.False(t, acked)
+	assertEventSet(t, esInProgID, ee[1].ID)
+	assertEventSet(t, esInProgAck, ee[1].ID)
+	assertEventSet(t, esDone, ee[0].ID)
+}

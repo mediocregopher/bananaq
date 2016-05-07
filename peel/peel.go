@@ -234,3 +234,61 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 
 	return p.c.GetEvent(ee[0].ID)
 }
+
+// QAckCommand describes the parameters which can be passed into the QAck
+// command
+type QAckCommand struct {
+	Client
+	Queue         string     // Required
+	ConsumerGroup string     // Required
+	Event         core.Event // Required, Contents field optional
+}
+
+// QAck acknowledges that an event has been successfully processed and should
+// not be re-processed. Only applicable for Events which were gotten through a
+// QGet with an AckDeadline. Returns true if the Event was successfully
+// acknowledged. false will be returned if the deadline was missed, and
+// therefore some other consumer may re-process the Event later.
+func (p Peel) QAck(c QAckCommand) (bool, error) {
+	now := time.Now()
+
+	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
+	esInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
+	esDone := queueDone(c.Queue, c.ConsumerGroup)
+
+	qa := core.QueryActions{
+		EventSetBase: esDone.Base,
+		QueryActions: []core.QueryAction{
+			{
+				QuerySelector: &core.QuerySelector{
+					EventSet: esInProgAck,
+					QueryEventScoreSelect: &core.QueryEventScoreSelect{
+						Event: c.Event,
+						Min:   core.NewTS(now),
+					},
+				},
+			},
+			{
+				Break: true,
+				QueryConditional: core.QueryConditional{
+					IfNoInput: true,
+				},
+			},
+			{
+				RemoveFrom: []core.EventSet{esInProgID, esInProgAck},
+			},
+			{
+				QueryAddTo: &core.QueryAddTo{
+					EventSets: []core.EventSet{esDone},
+				},
+			},
+		},
+		Now: now,
+	}
+
+	ee, err := p.c.Query(qa)
+	if err != nil {
+		return false, err
+	}
+	return len(ee) > 0, nil
+}
