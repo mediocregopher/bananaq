@@ -188,8 +188,8 @@ func TestQueryRangeSelect(t *T) {
 				QuerySelector: &QuerySelector{
 					EventSet: es,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
-						Min: ee[1].ID,
-						Max: ee[2].ID,
+						Min: TS(ee[1].ID),
+						Max: TS(ee[2].ID),
 					},
 				},
 			},
@@ -205,9 +205,9 @@ func TestQueryRangeSelect(t *T) {
 				QuerySelector: &QuerySelector{
 					EventSet: es,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
-						Min:     ee[0].ID,
+						Min:     TS(ee[0].ID),
 						MinExcl: true,
-						Max:     ee[3].ID,
+						Max:     TS(ee[3].ID),
 						MaxExcl: true,
 					},
 				},
@@ -224,8 +224,8 @@ func TestQueryRangeSelect(t *T) {
 				QuerySelector: &QuerySelector{
 					EventSet: es,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
-						Min:    ee[0].ID,
-						Max:    ee[3].ID,
+						Min:    TS(ee[0].ID),
+						Max:    TS(ee[3].ID),
 						Offset: 1,
 						Limit:  2,
 					},
@@ -243,8 +243,8 @@ func TestQueryRangeSelect(t *T) {
 				QuerySelector: &QuerySelector{
 					EventSet: es,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
-						Min:     ee[1].ID,
-						Max:     ee[2].ID,
+						Min:     TS(ee[1].ID),
+						Max:     TS(ee[2].ID),
 						Reverse: true,
 						Limit:   1,
 					},

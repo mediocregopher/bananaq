@@ -246,8 +246,8 @@ func eventSetFromKey(key string) EventSet {
 // return if it's in the set (and similarly for MaxExcl/Max). If Min or Max are
 // 0 that indicates -infinity or +infinity, respectively
 type QueryEventRangeSelect struct {
-	Min              ID
-	Max              ID
+	Min              TS
+	Max              TS
 	MinExcl, MaxExcl bool
 
 	// May be set instead of Min. The newest ID from the input to this

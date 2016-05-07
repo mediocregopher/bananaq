@@ -100,7 +100,6 @@ type QGetCommand struct {
 // events for the queue.
 func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 	now := time.Now()
-	nowID := core.ID(core.NewTS(now))
 	esAvail := queueAvailable(c.Queue)
 	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
 	esInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
@@ -142,7 +141,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 	}
 
 	mostRecentSelect := core.QueryEventRangeSelect{
-		Min:     nowID,
+		Min:     core.NewTS(now),
 		MinExcl: true,
 		Max:     0,
 		Limit:   1,
