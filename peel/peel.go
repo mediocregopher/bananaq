@@ -36,16 +36,18 @@ type Client struct {
 // command
 type QAddCommand struct {
 	Client
-	Queue    string        // Required
-	Expire   time.Duration // Required, TODO make time.Time?
-	Contents string        // Required
+	Queue    string    // Required
+	Expire   time.Time // Required
+	Contents string    // Required
 }
 
-// QAdd adds an event to a queue. The event will expire after the given
-// duration. The ID of the event is returned.
+// QAdd adds an event to a queue. The Expire will be used to generate an ID.
+// IDs are monotonically increasing and unique across the cluster, so the ID may
+// correspond to a very slightly greater time than the given Expire. That
+// (potentially slightly greater) time will also be used as the point in time
+// after which the event is no longer valid.
 func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
-	now := time.Now()
-	e, err := p.c.NewEvent(now.Add(c.Expire), c.Contents)
+	e, err := p.c.NewEvent(c.Expire, c.Contents)
 	if err != nil {
 		return 0, err
 	}
@@ -85,18 +87,18 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 // command
 type QGetCommand struct {
 	Client
-	Queue         string        // Required
-	ConsumerGroup string        // Required
-	Expire        time.Duration // TODO time.Time?
+	Queue         string // Required
+	ConsumerGroup string // Required
+	AckDeadline   time.Time
 }
 
 // QGet retrieves an available event from the given queue for the given consumer
-// group. If Expire is given, then the consumer has that long to QAck the Event
-// before it is placed back in the queue for this consumer group. If Expire is
-// not set, then the Event will never be placed back, and QAck isn't necessary..
-// An empty event is returned if there are no available events for the queue.
+// group. If AckDeadline is given, then the consumer has until then to QAck the
+// Event before it is placed back in the queue for this consumer group. If
+// AckDeadline is not set, then the Event will never be placed back, and QAck
+// isn't necessary..  An empty event is returned if there are no available
+// events for the queue.
 func (p Peel) QGet(c QGetCommand) (core.Event, error) {
-	// TODO have now be passed into Query?
 	now := time.Now()
 	nowID := core.ID(core.NewTS(now))
 	esAvail := queueAvailable(c.Queue)
@@ -108,7 +110,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 	// Depending on if Expire is set, we might add the event to the inProgs or
 	// done
 	var inProgOrDone []core.QueryAction
-	if c.Expire > 0 {
+	if !c.AckDeadline.IsZero() {
 		inProgOrDone = []core.QueryAction{
 			{
 				QueryAddTo: &core.QueryAddTo{
@@ -118,7 +120,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 			{
 				QueryAddTo: &core.QueryAddTo{
 					EventSets: []core.EventSet{esInProgAck},
-					Score:     core.NewTS(now.Add(c.Expire)),
+					Score:     core.NewTS(c.AckDeadline),
 				},
 			},
 		}
@@ -221,6 +223,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 	qa := core.QueryActions{
 		EventSetBase: esAvail.Base,
 		QueryActions: qq,
+		Now:          now,
 	}
 
 	ee, err := p.c.Query(qa)

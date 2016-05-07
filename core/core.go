@@ -377,6 +377,10 @@ type QueryActions struct {
 	// pipeline
 	EventSetBase string
 	QueryActions []QueryAction
+
+	// Optional, may be passed in if there is a previous notion of "current
+	// time", to maintain consitency
+	Now time.Time `msg:"-"`
 }
 
 // Query performs the given QueryActions pipeline. Whatever the final output
@@ -384,12 +388,17 @@ type QueryActions struct {
 func (c Core) Query(qas QueryActions) ([]Event, error) {
 	var b []byte
 	var err error
+
+	if qas.Now.IsZero() {
+		qas.Now = time.Now()
+	}
+
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
 		key := EventSet{Base: qas.EventSetBase}.key()
 		b, err = util.LuaEval(c.Cmder, string(queryLua), 1, key, nowb, qasb).Bytes()
-	}, NewTS(time.Now()), &qas)
+	}, NewTS(qas.Now), &qas)
 	if err != nil {
 		return nil, err
 	}

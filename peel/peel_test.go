@@ -58,7 +58,7 @@ func TestQAdd(t *T) {
 	id, err := testPeel.QAdd(QAddCommand{
 		Client:   randClient(),
 		Queue:    queue,
-		Expire:   10 * time.Second,
+		Expire:   time.Now().Add(10 * time.Second),
 		Contents: contents,
 	})
 	require.Nil(t, err)
@@ -99,7 +99,7 @@ func newTestQueue(t *T, numEvents int) (string, []core.Event) {
 		id, err := testPeel.QAdd(QAddCommand{
 			Client:   randClient(),
 			Queue:    queue,
-			Expire:   10 * time.Second,
+			Expire:   time.Now().Add(10 * time.Second),
 			Contents: testutil.RandStr(),
 		})
 		require.Nil(t, err)
@@ -128,7 +128,7 @@ func TestQGet(t *T) {
 		Client:        randClient(),
 		Queue:         queue,
 		ConsumerGroup: cgroup,
-		Expire:        1 * time.Second,
+		AckDeadline:   time.Now().Add(1 * time.Second),
 	}
 	e, err := testPeel.QGet(cmd)
 	require.Nil(t, err)
@@ -144,7 +144,7 @@ func TestQGet(t *T) {
 	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID)
 
 	// Test that empty expire goes straight to done
-	cmd.Expire = 0
+	cmd.AckDeadline = time.Time{}
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ee[2], e)
