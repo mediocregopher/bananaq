@@ -241,11 +241,11 @@ func eventSetFromKey(key string) EventSet {
 // wherein I develop what amounts to a DSL for working with multiple EventSet's
 // contents transactionally
 
-// QueryEventRangeSelect is used to select all Events within the given range
-// from an EventSet. If MinExcl is true, Min itself will be excluded from the
+// QueryScoreRange is used by multiple selectors to describe a range of Events
+// by their scores. If MinExcl is true, Min itself will be excluded from the
 // return if it's in the set (and similarly for MaxExcl/Max). If Min or Max are
 // 0 that indicates -infinity or +infinity, respectively
-type QueryEventRangeSelect struct {
+type QueryScoreRange struct {
 	Min              TS
 	Max              TS
 	MinExcl, MaxExcl bool
@@ -257,6 +257,12 @@ type QueryEventRangeSelect struct {
 	// May be set instead of Max. The oldest ID from the input to this
 	// QueryAction will be used as the Max. If the input is empty, Max will be 0
 	MaxFromInput bool
+}
+
+// QueryEventRangeSelect is used to select all Events within the given range
+// from an EventSet.
+type QueryEventRangeSelect struct {
+	QueryScoreRange
 
 	// Optional modifiers. If Offset is nonzero, Limit must be nonzero too (it
 	// can be -1 to indicate no limit)
@@ -351,6 +357,14 @@ type QueryAddTo struct {
 	Score     TS
 }
 
+// QueryRemoveByScore is used to remove Events from EventSets based on a range
+// of scores. This action does not change the input in anyway, it simply passes
+// the input through as its output.
+type QueryRemoveByScore struct {
+	EventSets []EventSet
+	QueryScoreRange
+}
+
 // QueryAction describes a single action to take on a set of events. Every
 // action has an input and an output, which are both always sorted
 // chronologically. Only one single field, apart from QueryConditional, should
@@ -365,6 +379,9 @@ type QueryAction struct {
 	// Adds the input Events to the given EventSets. See its doc string for more
 	// info
 	*QueryAddTo
+
+	// Removes Events from EventSets by score. See its doc string for more info
+	*QueryRemoveByScore
 
 	// Removes the input Events from the given EventSets
 	RemoveFrom []EventSet

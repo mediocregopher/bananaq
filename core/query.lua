@@ -39,6 +39,22 @@ local function formatQEMinMax(m, excl, inf)
     return mm
 end
 
+-- handles determining the min/max parameters for a command following the score
+-- range syntax in redis (e.g. zrangebyscore). Returns the string to use as min
+-- and the string to use as max
+local function query_score_range(input, qsr)
+    if qsr.MinFromInput then
+        if #input > 0 then qsr.Min = input[#input].ID else qsr.Min = 0 end
+    end
+    local min = formatQEMinMax(qsr.Min, qsr.MinExcl, "-inf")
+    
+    if qsr.MaxFromInput then
+        if #input > 0 then qsr.Max = input[1].ID else qsr.Max = 0 end
+    end
+    local max = formatQEMinMax(qsr.Max, qsr.MaxExcl, "+inf")
+    return min, max
+end
+
 -- predefined this because it and query_select_inner call each other recursively
 local query_select
 
@@ -49,16 +65,7 @@ local function query_select_inner(input, qs)
     local esKey = eventSetKey(qs.EventSet)
     if qs.QueryEventRangeSelect then
         local qe = qs.QueryEventRangeSelect
-
-        if qe.MinFromInput then
-            if #input > 0 then qe.Min = input[#input].ID else qe.Min = 0 end
-        end
-        local min = formatQEMinMax(qe.Min, qe.MinExcl, "-inf")
-
-        if qe.MaxFromInput then
-            if #input > 0 then qe.Max = input[1].ID else qe.Max = 0 end
-        end
-        local max = formatQEMinMax(qe.Max, qe.MaxExcl, "+inf")
+        local min, max = query_score_range(input, qe.QueryScoreRange)
 
         local zrangebyscore = "ZRANGEBYSCORE"
         if qe.Reverse then
@@ -196,6 +203,16 @@ local function query_action(input, qa)
             for i = 1, #input do
                 redis.call("ZREM", esKey, input[i].packed)
             end
+        end
+        return input, false
+    end
+
+    if qa.QueryRemoveByScore then
+        local qrems = qa.QueryRemoveByScore
+        local min, max = query_score_range(input, qrems.QueryScoreRange)
+        for i = 1, #qrems.EventSets do
+            local esKey = eventSetKey(qrems.EventSets[i])
+            redis.call("ZREMRANGEBYSCORE", esKey, min, max)
         end
         return input, false
     end

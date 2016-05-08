@@ -110,6 +110,18 @@ func newTestQueue(t *T, numEvents int) (string, []core.Event) {
 	return queue, ee
 }
 
+func randEmptyEvent(t *T, expired bool) core.Event {
+	var id core.ID
+	if expired {
+		id = core.ID(core.NewTS(time.Now().Add(-10 * time.Second)))
+	} else {
+		var err error
+		id, err = testPeel.c.NewID(core.NewTS(time.Now().Add(10 * time.Second)))
+		require.Nil(t, err)
+	}
+	return core.Event{ID: id}
+}
+
 func TestQGet(t *T) {
 	queue, ee := newTestQueue(t, 6)
 	cgroup := testutil.RandStr()
@@ -235,4 +247,51 @@ func TestQAck(t *T) {
 	assertEventSet(t, esInProgID, ee[1].ID)
 	assertEventSet(t, esInProgAck, ee[1].ID)
 	assertEventSet(t, esDone, ee[0].ID)
+}
+
+func TestClean(t *T) {
+	queue := testutil.RandStr()
+	cgroup := testutil.RandStr()
+	esInProgID := queueInProgressByID(queue, cgroup)
+	esInProgAck := queueInProgressByAck(queue, cgroup)
+	esDone := queueDone(queue, cgroup)
+	esRedo := queueRedo(queue, cgroup)
+	now := time.Now()
+
+	// in progress, has neither expired nor missed its deadline
+	ee0 := randEmptyEvent(t, false)
+	requireAddToES(t, esInProgID, ee0, 0)
+	requireAddToES(t, esInProgAck, ee0, core.NewTS(now.Add(10*time.Millisecond)))
+
+	// in progress, missed its deadline
+	ee1 := randEmptyEvent(t, false)
+	requireAddToES(t, esInProgID, ee1, 0)
+	requireAddToES(t, esInProgAck, ee1, core.NewTS(now.Add(-10*time.Millisecond)))
+
+	// in progress, expired
+	ee2 := randEmptyEvent(t, true)
+	requireAddToES(t, esInProgID, ee2, 0)
+	requireAddToES(t, esInProgAck, ee2, core.NewTS(now.Add(-10*time.Millisecond)))
+
+	// in redo, not expired
+	ee3 := randEmptyEvent(t, false)
+	requireAddToES(t, esRedo, ee3, 0)
+
+	// in redo, expired
+	ee4 := randEmptyEvent(t, true)
+	requireAddToES(t, esRedo, ee4, 0)
+
+	// in done, not expired
+	ee5 := randEmptyEvent(t, false)
+	requireAddToES(t, esDone, ee5, 0)
+
+	// in done, expired
+	ee6 := randEmptyEvent(t, true)
+	requireAddToES(t, esDone, ee6, 0)
+
+	require.Nil(t, testPeel.Clean(queue, cgroup))
+	assertEventSet(t, esInProgID, ee0.ID)
+	assertEventSet(t, esInProgAck, ee0.ID)
+	assertEventSet(t, esDone, ee5.ID)
+	assertEventSet(t, esRedo, ee1.ID, ee3.ID)
 }

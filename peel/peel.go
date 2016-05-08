@@ -141,9 +141,11 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 	}
 
 	mostRecentSelect := core.QueryEventRangeSelect{
-		Min:     core.NewTS(now),
-		MinExcl: true,
-		Max:     0,
+		QueryScoreRange: core.QueryScoreRange{
+			Min:     core.NewTS(now),
+			MinExcl: true,
+			Max:     0,
+		},
 		Limit:   1,
 		Reverse: true,
 	}
@@ -186,9 +188,11 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 			QuerySelector: &core.QuerySelector{
 				EventSet: esAvail,
 				QueryEventRangeSelect: &core.QueryEventRangeSelect{
-					MinFromInput: true,
-					MinExcl:      true,
-					Limit:        1,
+					QueryScoreRange: core.QueryScoreRange{
+						MinFromInput: true,
+						MinExcl:      true,
+					},
+					Limit: 1,
 				},
 			},
 		},
@@ -291,4 +295,75 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 		return false, err
 	}
 	return len(ee) > 0, nil
+}
+
+// Clean finds all the events which were retrieved for the given
+// queue/consumerGroup which weren't ack'd by the deadline, and makes them
+// available to be retrieved again. This should be called periodically for all
+// queue/consumerGroups.
+func (p Peel) Clean(queue, consumerGroup string) error {
+	now := time.Now()
+	nowTS := core.NewTS(now)
+
+	esInProgID := queueInProgressByID(queue, consumerGroup)
+	esInProgAck := queueInProgressByAck(queue, consumerGroup)
+	esDone := queueDone(queue, consumerGroup)
+	esRedo := queueRedo(queue, consumerGroup)
+
+	qsr := core.QueryScoreRange{
+		Max: nowTS,
+	}
+	qa := core.QueryActions{
+		EventSetBase: esDone.Base,
+		QueryActions: []core.QueryAction{
+			// First find all events who missed their ack deadline, remove them
+			// from both inProgs and add them to redo
+			{
+				QuerySelector: &core.QuerySelector{
+					EventSet: esInProgAck,
+					QueryEventRangeSelect: &core.QueryEventRangeSelect{
+						QueryScoreRange: qsr,
+					},
+				},
+			},
+			{
+				RemoveFrom: []core.EventSet{esInProgAck, esInProgID},
+			},
+			{
+				QueryAddTo: &core.QueryAddTo{
+					EventSets: []core.EventSet{esRedo},
+				},
+			},
+
+			// Next find all events in inProgID that have outright expired,
+			// remove them from inProgAck (since that's the only way to find
+			// them there) and inProgID while we're there
+			{
+				QuerySelector: &core.QuerySelector{
+					EventSet: esInProgID,
+					QueryEventRangeSelect: &core.QueryEventRangeSelect{
+						QueryScoreRange: qsr,
+					},
+				},
+			},
+			{
+				RemoveFrom: []core.EventSet{esInProgAck, esInProgID},
+			},
+
+			// Finally remove all that have outright expired from done and redo
+			{
+				QueryRemoveByScore: &core.QueryRemoveByScore{
+					QueryScoreRange: qsr,
+					EventSets: []core.EventSet{
+						esDone,
+						esRedo,
+					},
+				},
+			},
+		},
+		Now: now,
+	}
+
+	_, err := p.c.Query(qa)
+	return err
 }
