@@ -68,10 +68,6 @@ func New(redisAddr string, poolSize int) (Core, error) {
 	return Core{c}, err
 }
 
-var idKey = "id"
-
-// TODO TS might not need to be public
-
 // TS identifies a single point in time as an integer number of microseconds
 type TS uint64
 
@@ -95,45 +91,39 @@ func (ts TS) Time() time.Time {
 // time. It also represents the point in time at which an event will expire
 type ID TS
 
+func pexpireAt(t TS, buffer time.Duration) int64 {
+	return t.Time().Add(buffer).UnixNano() / 1e6 // to millisecond
+}
+
+func eventKey(id ID, typ string) string {
+	return fmt.Sprintf("event:{%d}:%s", id, typ)
+}
+
+var newIDLua = `
+	local key = KEYS[1]
+	local pexpire = ARGV[1]
+	if not redis.call("SET", key, 1, "NX") then return nil end
+	redis.call("PEXPIREAT", key, pexpire)
+	return "OK"
+`
+
 // NewID returns a new, unique ID corresponding to the given timestamp, which
-// can be used for a new event. All IDs are monotonically increasing across the
-// entire cluster. Consequently, the ID returned might differ in the time it
-// represents from the given TS by a very small amount.
+// can be used for a new event. All IDs are unique across the cluster.
+// Consequently, the ID returned might differ in the time it represents from the
+// given TS by a very small amount.
 func (c Core) NewID(t TS) (ID, error) {
-	lua := `
-		local key = KEYS[1]
-		local now_raw = ARGV[1]
-		local now = cmsgpack.unpack(now_raw)
-		local last_raw = redis.call("GET", key)
-
-		if not last_raw then
-			redis.call("SET", key, now_raw)
-			return now_raw
-		end
-
-		local last = cmsgpack.unpack(last_raw)
-		if last < now then
-			redis.call("SET", key, now_raw)
-			return now_raw
-		end
-
-		-- Add a microsecond and use that
-		last = last + 1
-		last_raw = cmsgpack.pack(last)
-		redis.call("SET", key, last_raw)
-		return last_raw
-	`
-
-	var ib []byte
-	var err error
-	withMarshaled(func(bb [][]byte) {
-		nowb := bb[0]
-		ib, err = util.LuaEval(c.Cmder, lua, 1, idKey, nowb).Bytes()
-	}, t)
-
-	var id ID
-	_, err = id.UnmarshalMsg(ib)
-	return id, err
+	for {
+		id := ID(t)
+		k := eventKey(id, "id")
+		pex := pexpireAt(t, 30*time.Second)
+		r := util.LuaEval(c.Cmder, newIDLua, 1, k, pex)
+		if r.Err != nil {
+			return 0, r.Err
+		} else if !r.IsType(redis.Nil) {
+			return ID(t), nil
+		}
+		t++
+	}
 }
 
 // Event describes all the information related to a single event. An event is
@@ -157,15 +147,12 @@ func (c Core) NewEvent(expire time.Time, contents string) (Event, error) {
 	}, nil
 }
 
-func (e Event) key() string {
-	return fmt.Sprintf("event:%d", e.ID)
-}
-
 // SetEvent sets the event with the given id to have the given contents. The
 // event will expire based on the ID field in it (which will be truncated to an
 // integer) added with the given buffer
 func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
-	pexpire := TS(e.ID).Time().Add(expireBuffer).UnixNano() / 1e6 // to milliseconds
+	k := eventKey(e.ID, "event")
+	pex := pexpireAt(TS(e.ID), expireBuffer)
 	lua := `
 		local key = KEYS[1]
 		local pexpire = ARGV[1]
@@ -177,7 +164,7 @@ func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c.Cmder, lua, 1, e.key(), pexpire, eb).Err
+		err = util.LuaEval(c.Cmder, lua, 1, k, pex, eb).Err
 	}, &e)
 	return err
 }
@@ -185,7 +172,7 @@ func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
 // GetEvent returns the event identified by the given id, or ErrNotFound if it's
 // expired or never existed
 func (c Core) GetEvent(id ID) (Event, error) {
-	r := c.Cmd("GET", Event{ID: id}.key())
+	r := c.Cmd("GET", eventKey(id, "event"))
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}

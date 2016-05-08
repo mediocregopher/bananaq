@@ -42,10 +42,10 @@ type QAddCommand struct {
 }
 
 // QAdd adds an event to a queue. The Expire will be used to generate an ID.
-// IDs are monotonically increasing and unique across the cluster, so the ID may
-// correspond to a very slightly greater time than the given Expire. That
-// (potentially slightly greater) time will also be used as the point in time
-// after which the event is no longer valid.
+// IDs are unique across the cluster, so the ID may correspond to a very
+// slightly greater time than the given Expire. That (potentially slightly
+// greater) time will also be used as the point in time after which the event is
+// no longer valid.
 func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 	e, err := p.c.NewEvent(c.Expire, c.Contents)
 	if err != nil {

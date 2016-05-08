@@ -16,11 +16,6 @@ func init() {
 	if testCore, err = New("127.0.0.1:6379", 1); err != nil {
 		panic(err)
 	}
-
-	// We set idKey to be random because this package's tests assume they are
-	// the only thing calling NewID. But if tests for other sub-packages in
-	// bananaq are also running they will be calling it too.
-	idKey = idKey + ":" + testutil.RandStr()
 }
 
 func TestNewID(t *T) {
