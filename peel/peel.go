@@ -371,3 +371,31 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	_, err := p.c.Query(qa)
 	return err
 }
+
+// CleanAvailable cleans up the stored Events for a given queue across all consumer
+// groups, removing those which have expired.
+func (p Peel) CleanAvailable(queue string) error {
+	now := time.Now()
+	nowTS := core.NewTS(now)
+
+	esAvail := queueAvailable(queue)
+	qa := core.QueryActions{
+		EventSetBase: esAvail.Base,
+		QueryActions: []core.QueryAction{
+			{
+				QueryRemoveByScore: &core.QueryRemoveByScore{
+					QueryScoreRange: core.QueryScoreRange{
+						Max: nowTS,
+					},
+					EventSets: []core.EventSet{
+						esAvail,
+					},
+				},
+			},
+		},
+		Now: now,
+	}
+
+	_, err := p.c.Query(qa)
+	return err
+}

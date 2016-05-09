@@ -295,3 +295,20 @@ func TestClean(t *T) {
 	assertEventSet(t, esDone, ee5.ID)
 	assertEventSet(t, esRedo, ee1.ID, ee3.ID)
 }
+
+func TestCleanAvailable(t *T) {
+	queue := testutil.RandStr()
+	esAvail := queueAvailable(queue)
+
+	ee0 := randEmptyEvent(t, false)
+	requireAddToES(t, esAvail, ee0, 0)
+	ee1 := randEmptyEvent(t, true)
+	requireAddToES(t, esAvail, ee1, 0)
+	ee2 := randEmptyEvent(t, false)
+	requireAddToES(t, esAvail, ee2, 0)
+	ee3 := randEmptyEvent(t, true)
+	requireAddToES(t, esAvail, ee3, 0)
+
+	require.Nil(t, testPeel.CleanAvailable(queue))
+	assertEventSet(t, esAvail, ee0.ID, ee2.ID)
+}

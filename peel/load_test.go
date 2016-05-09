@@ -37,6 +37,7 @@ func TestConsumerLoad(t *T) {
 	go func() {
 		for range time.Tick(10 * time.Millisecond) {
 			require.Nil(t, testPeel.Clean(queue, cgroup))
+			require.Nil(t, testPeel.CleanAvailable(queue))
 		}
 	}()
 
