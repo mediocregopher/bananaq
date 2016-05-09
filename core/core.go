@@ -404,25 +404,25 @@ type QueryActions struct {
 // Query performs the given QueryActions pipeline. Whatever the final output
 // from the pipeline is is returned.
 func (c Core) Query(qas QueryActions) ([]Event, error) {
-	var b []byte
 	var err error
 
 	if qas.Now.IsZero() {
 		qas.Now = time.Now()
 	}
 
+	var eeb []byte
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
 		key := EventSet{Base: qas.EventSetBase}.key()
-		b, err = util.LuaEval(c.Cmder, string(queryLua), 1, key, nowb, qasb).Bytes()
+		eeb, err = util.LuaEval(c.Cmder, string(queryLua), 1, key, nowb, qasb).Bytes()
 	}, NewTS(qas.Now), &qas)
 	if err != nil {
 		return nil, err
 	}
 
 	var ee Events
-	if _, err := ee.UnmarshalMsg(b); err != nil {
+	if _, err = ee.UnmarshalMsg(eeb); err != nil {
 		return nil, err
 	}
 	if ee.Events == nil {

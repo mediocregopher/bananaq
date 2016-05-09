@@ -22,7 +22,7 @@ func queueInProgressByID(queue, cgroup string) core.EventSet {
 // corresponding to the event's ack deadline. Used to timeout in progress events
 // and put them in redo
 func queueInProgressByAck(queue, cgroup string) core.EventSet {
-	return core.EventSet{Base: queue, Subs: []string{cgroup, "inprogress", "expire"}}
+	return core.EventSet{Base: queue, Subs: []string{cgroup, "inprogress", "ack"}}
 }
 
 // Keeps track of events which were previously attempted to be processed but

@@ -48,7 +48,7 @@ func assertEventSet(t *T, es core.EventSet, ids ...core.ID) {
 	}
 	assert.Len(t, eeIDs, len(ids))
 	for _, id := range ids {
-		assert.Contains(t, eeIDs, id)
+		assert.Contains(t, eeIDs, id, "doesn't contain id: %d", id)
 	}
 }
 
@@ -99,7 +99,7 @@ func newTestQueue(t *T, numEvents int) (string, []core.Event) {
 		id, err := testPeel.QAdd(QAddCommand{
 			Client:   randClient(),
 			Queue:    queue,
-			Expire:   time.Now().Add(10 * time.Second),
+			Expire:   time.Now().Add(10 * time.Minute),
 			Contents: testutil.RandStr(),
 		})
 		require.Nil(t, err)

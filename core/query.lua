@@ -47,7 +47,7 @@ local function query_score_range(input, qsr)
         if #input > 0 then qsr.Min = input[#input].ID else qsr.Min = 0 end
     end
     local min = formatQEMinMax(qsr.Min, qsr.MinExcl, "-inf")
-    
+
     if qsr.MaxFromInput then
         if #input > 0 then qsr.Max = input[1].ID else qsr.Max = 0 end
     end
@@ -73,11 +73,14 @@ local function query_select_inner(input, qs)
             min, max = max, min
         end
 
+        local ret
         if qe.Limit ~= 0 then
-            return redis.call(zrangebyscore, esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
+            ret = redis.call(zrangebyscore, esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
         else
-            return redis.call(zrangebyscore, esKey, min, max)
+            ret = redis.call(zrangebyscore, esKey, min, max)
         end
+        --debug({ret=ret, esKey=esKey, cmd=zrangebyscore, min=min, max=max})
+        return ret
 
     elseif qs.QueryEventScoreSelect then
         local qes = qs.QueryEventScoreSelect

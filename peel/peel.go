@@ -195,6 +195,9 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 					Limit: 1,
 				},
 			},
+			QueryConditional: core.QueryConditional{
+				IfInput: true,
+			},
 		},
 	)
 
@@ -222,6 +225,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 			},
 		},
 	})
+	qq = append(qq, inProgOrDone...)
 
 	qa := core.QueryActions{
 		EventSetBase: esAvail.Base,
