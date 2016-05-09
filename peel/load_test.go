@@ -2,6 +2,7 @@ package peel
 
 import (
 	"math/rand"
+	"os"
 	. "testing"
 	"time"
 
@@ -15,6 +16,10 @@ import (
 // This test is looking for any inconsistencies which might appear under load
 // from race-conditions and things of that nature
 func TestConsumerLoad(t *T) {
+	if os.Getenv("BANANAQ_LOAD_TEST") == "" {
+		return
+	}
+
 	numEvents := 10000
 	llog.Info("creating test queue", llog.KV{"numEvents": numEvents})
 	queue, ee := newTestQueue(t, numEvents)
