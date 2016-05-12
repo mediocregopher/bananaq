@@ -26,8 +26,9 @@ func New(redisAddr string, poolSize int) (Peel, error) {
 }
 
 // Client describes the information attached to any given client of bananaq.
-// For most commands this isn't actually necessary except for logging, but for
-// some it's actually used (these will be documented as such)
+// For most commands this isn't actually necessary, but for some it's actually
+// used (these will be documented as such)
+// TODO this probably isn't actually necessary
 type Client struct {
 	ID string
 }
@@ -372,8 +373,8 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	return err
 }
 
-// CleanAvailable cleans up the stored Events for a given queue across all consumer
-// groups, removing those which have expired.
+// CleanAvailable cleans up the stored Events for a given queue across all
+// consumer groups, removing those which have expired.
 func (p Peel) CleanAvailable(queue string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
