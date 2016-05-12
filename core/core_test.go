@@ -708,3 +708,13 @@ func TestQueryConditionals(t *T) {
 	require.Nil(t, err)
 	assert.Empty(t, ee)
 }
+
+func TestEventSetCounts(t *T) {
+	base := testutil.RandStr()
+	es1, _ := randPopulatedEventSet(t, base, 5)
+	es2, _ := randPopulatedEventSet(t, base, 1)
+
+	counts, err := testCore.EventSetCounts(randEventSet(base), es1, randEventSet(base), es2)
+	require.Nil(t, err)
+	assert.Equal(t, []uint64{0, 5, 0, 1}, counts)
+}

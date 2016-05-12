@@ -312,3 +312,32 @@ func TestCleanAvailable(t *T) {
 	require.Nil(t, testPeel.CleanAvailable(queue))
 	assertEventSet(t, esAvail, ee0.ID, ee2.ID)
 }
+
+func TestQStatus(t *T) {
+	queue, ee := newTestQueue(t, 6)
+	cgroup := testutil.RandStr()
+	esInProgID := queueInProgressByID(queue, cgroup)
+	esDone := queueDone(queue, cgroup)
+	esRedo := queueRedo(queue, cgroup)
+
+	requireAddToES(t, esInProgID, ee[0], 0)
+	requireAddToES(t, esDone, ee[1], 0)
+	requireAddToES(t, esDone, ee[2], 0)
+	requireAddToES(t, esRedo, ee[3], 0)
+
+	qs, err := testPeel.QStatus(QStatusCommand{
+		Queue:         queue,
+		ConsumerGroup: cgroup,
+	})
+	require.Nil(t, err)
+
+	expected := QueueStats{
+		Total:      6,
+		InProgress: 1,
+		Done:       2,
+		Redo:       1,
+		Available:  2,
+	}
+
+	assert.Equal(t, expected, qs)
+}

@@ -431,3 +431,41 @@ func (c Core) Query(qas QueryActions) ([]Event, error) {
 
 	return ee.Events, nil
 }
+
+// EventSetCounts returns a slice with a number corresponding to the number of
+// Events in each given EventSet
+func (c Core) EventSetCounts(es ...EventSet) ([]uint64, error) {
+	if len(es) == 0 {
+		return []uint64{}, nil
+	}
+
+	keys := make([]string, len(es))
+	for i := range es {
+		keys[i] = es[i].key()
+	}
+
+	lua := `
+		local ret = {}
+		for i = 1,#KEYS do
+			local c = redis.call("ZCARD", KEYS[i])
+			table.insert(ret, c)
+		end
+		return ret
+	`
+
+	arr, err := util.LuaEval(c.Cmder, lua, len(keys), keys).Array()
+	if err != nil {
+		return nil, err
+	}
+
+	ret := make([]uint64, len(arr))
+	for i := range arr {
+		c, err := arr[i].Int64()
+		if err != nil {
+			return nil, err
+		}
+		ret[i] = uint64(c)
+	}
+
+	return ret, nil
+}

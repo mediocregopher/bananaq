@@ -399,3 +399,56 @@ func (p Peel) CleanAvailable(queue string) error {
 	_, err := p.c.Query(qa)
 	return err
 }
+
+// TODO CleanAll
+
+// QStatusCommand describes the parameters which can be passed into the QStatus
+// command
+type QStatusCommand struct {
+	Client
+	Queue         string // Required
+	ConsumerGroup string // Required
+}
+
+// QueueStats are available statistics about a queue (per consumer group) at any
+// given moment. Note that the only events which are considered for any queue
+// are those which haven't expired or been cleaned up
+type QueueStats struct {
+	// Number of events for the queue in the system. Will be the same regardless
+	// of consumer group
+	Total uint64
+
+	// Number of events the consumer group has yet to process for the queue
+	Available uint64
+
+	// Number of events currently being worked on by the consumer group
+	InProgress uint64
+
+	// Number of events awaiting being re-attempted by the consumer group
+	Redo uint64
+
+	// Number of events the consumer group has successfully processed
+	Done uint64
+}
+
+// QStatus returns information about the given queues relative to the given
+// consumer group. See the QueueStats docs for more on what exactly is returned.
+func (p Peel) QStatus(c QStatusCommand) (QueueStats, error) {
+	esAvail := queueAvailable(c.Queue)
+	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
+	esRedo := queueRedo(c.Queue, c.ConsumerGroup)
+	esDone := queueDone(c.Queue, c.ConsumerGroup)
+
+	var qs QueueStats
+	counts, err := p.c.EventSetCounts(esAvail, esInProgID, esRedo, esDone)
+	if err != nil {
+		return qs, err
+	}
+
+	qs.Total = counts[0]
+	qs.InProgress = counts[1]
+	qs.Redo = counts[2]
+	qs.Done = counts[3]
+	qs.Available = qs.Total - qs.InProgress - qs.Redo - qs.Done
+	return qs, nil
+}
