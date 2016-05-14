@@ -9,13 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testCore Core
+var testCore *Core
 
 func init() {
 	var err error
 	if testCore, err = New("127.0.0.1:6379", 1); err != nil {
 		panic(err)
 	}
+	go func() { panic(testCore.Run()) }()
 }
 
 func TestNewID(t *T) {
@@ -48,13 +49,15 @@ func requireNewID(t *T) ID {
 }
 
 func requireNewEvent(t *T) Event {
-	e, err := testCore.NewEvent(time.Now().Add(1*time.Minute), testutil.RandStr())
+	ts := NewTS(time.Now().Add(1 * time.Minute))
+	e, err := testCore.NewEvent(ts, testutil.RandStr())
 	require.Nil(t, err)
 	return e
 }
 
 func requireNewEmptyEvent(t *T) Event {
-	e, err := testCore.NewEvent(time.Now().Add(1*time.Minute), "")
+	ts := NewTS(time.Now().Add(1 * time.Minute))
+	e, err := testCore.NewEvent(ts, "")
 	require.Nil(t, err)
 	return e
 }
@@ -119,7 +122,7 @@ func TestGetSetEvent(t *T) {
 	contents := testutil.RandStr()
 	expire := time.Now().Add(500 * time.Millisecond)
 
-	e, err := testCore.NewEvent(expire, contents)
+	e, err := testCore.NewEvent(NewTS(expire), contents)
 	require.Nil(t, err)
 
 	assert.Nil(t, testCore.SetEvent(e, 500*time.Millisecond))

@@ -15,7 +15,7 @@ import (
 // interact with the database directly. It can be initialized manually, or using
 // the New method. All methods on Peel are thread-safe.
 type Peel struct {
-	c core.Core
+	c *core.Core
 }
 
 // New initializes a Peel struct with a Core, using the given redis address and
@@ -48,7 +48,7 @@ type QAddCommand struct {
 // greater) time will also be used as the point in time after which the event is
 // no longer valid.
 func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
-	e, err := p.c.NewEvent(c.Expire, c.Contents)
+	e, err := p.c.NewEvent(core.NewTS(c.Expire), c.Contents)
 	if err != nil {
 		return 0, err
 	}

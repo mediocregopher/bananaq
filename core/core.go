@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/levenlabs/golib/radixutil"
+	"github.com/mediocregopher/radix.v2/pool"
 	"github.com/mediocregopher/radix.v2/redis"
 	"github.com/mediocregopher/radix.v2/util"
+	"github.com/mediocregopher/wublub"
 	"github.com/tinylib/msgp/msgp"
 )
 
@@ -55,17 +57,44 @@ var (
 )
 
 // Core contains all the information needed to interact with the underlying
-// redis instances for bananaq. It can be initialized manually or using New. All
-// methods on Core are thread-safe.
+// redis instances for bananaq. All methods on Core are thread-safe.
 type Core struct {
 	util.Cmder `msg:"-"`
+	w          *wublub.Wublub
 }
 
 // New initializes a Core struct using the given redis address and pool size.
 // The redis address can be a standalone node or a node in a cluster.
-func New(redisAddr string, poolSize int) (Core, error) {
-	c, err := radixutil.DialMaybeCluster("tcp", redisAddr, poolSize)
-	return Core{c}, err
+func New(redisAddr string, poolSize int) (*Core, error) {
+	cmder, err := radixutil.DialMaybeCluster("tcp", redisAddr, poolSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// It's unfortunate that we have to make yet another pool, but we don't know
+	// that cmder is a pool, and this is more straightforward than inspecting
+	// it.
+	// TODO figure out if it's possible for the user to pass their own pool into
+	// here, or at least pass a DialFunc?
+	p, err := pool.New("tcp", redisAddr, poolSize)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &Core{
+		Cmder: cmder,
+		w:     wublub.New(wublub.Opts{Pool: p}),
+	}
+
+	return c, nil
+}
+
+// Run performs all the background work needed to support Core. It will block
+// until an error is reached, and then return that. At that point the caller
+// should handle the error (i.e. probably log it), and then decide whether to
+// stop execution or call Run again.
+func (c *Core) Run() error {
+	return c.w.Run()
 }
 
 // TS identifies a single point in time as an integer number of microseconds
@@ -111,7 +140,7 @@ var newIDLua = `
 // can be used for a new event. All IDs are unique across the cluster.
 // Consequently, the ID returned might differ in the time it represents from the
 // given TS by a very small amount.
-func (c Core) NewID(t TS) (ID, error) {
+func (c *Core) NewID(t TS) (ID, error) {
 	for {
 		id := ID(t)
 		k := eventKey(id, "id")
@@ -135,8 +164,8 @@ type Event struct {
 
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
-func (c Core) NewEvent(expire time.Time, contents string) (Event, error) {
-	id, err := c.NewID(NewTS(expire))
+func (c *Core) NewEvent(expire TS, contents string) (Event, error) {
+	id, err := c.NewID(expire)
 	if err != nil {
 		return Event{}, err
 	}
@@ -150,7 +179,7 @@ func (c Core) NewEvent(expire time.Time, contents string) (Event, error) {
 // SetEvent sets the event with the given id to have the given contents. The
 // event will expire based on the ID field in it (which will be truncated to an
 // integer) added with the given buffer
-func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
+func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	k := eventKey(e.ID, "event")
 	pex := pexpireAt(TS(e.ID), expireBuffer)
 	lua := `
@@ -171,7 +200,7 @@ func (c Core) SetEvent(e Event, expireBuffer time.Duration) error {
 
 // GetEvent returns the event identified by the given id, or ErrNotFound if it's
 // expired or never existed
-func (c Core) GetEvent(id ID) (Event, error) {
+func (c *Core) GetEvent(id ID) (Event, error) {
 	r := c.Cmd("GET", eventKey(id, "event"))
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
@@ -403,7 +432,7 @@ type QueryActions struct {
 
 // Query performs the given QueryActions pipeline. Whatever the final output
 // from the pipeline is is returned.
-func (c Core) Query(qas QueryActions) ([]Event, error) {
+func (c *Core) Query(qas QueryActions) ([]Event, error) {
 	var err error
 
 	if qas.Now.IsZero() {
@@ -434,7 +463,7 @@ func (c Core) Query(qas QueryActions) ([]Event, error) {
 
 // EventSetCounts returns a slice with a number corresponding to the number of
 // Events in each given EventSet
-func (c Core) EventSetCounts(es ...EventSet) ([]uint64, error) {
+func (c *Core) EventSetCounts(es ...EventSet) ([]uint64, error) {
 	if len(es) == 0 {
 		return []uint64{}, nil
 	}
