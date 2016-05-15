@@ -17,6 +17,8 @@ func init() {
 	if testPeel, err = New("127.0.0.1:6379", 1); err != nil {
 		panic(err)
 	}
+	// TODO when peel has a Run method, use that here
+	go func() { panic(testPeel.c.Run()) }()
 }
 
 func randClient() Client {
@@ -137,7 +139,6 @@ func TestQGet(t *T) {
 
 	// Test that a "blank" queue gives us its first event
 	cmd := QGetCommand{
-		Client:        randClient(),
 		Queue:         queue,
 		ConsumerGroup: cgroup,
 		AckDeadline:   time.Now().Add(1 * time.Second),
@@ -204,6 +205,64 @@ func TestQGet(t *T) {
 	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID)
 	assertEventSet(t, esDone, ee[2].ID, ee[3].ID, ee[4].ID, ee[5].ID)
 	assertEventSet(t, esRedo) // assert empty
+}
+
+func TestQGetBlocking(t *T) {
+	queue, ee := newTestQueue(t, 1)
+	cgroup := testutil.RandStr()
+
+	cmd := QGetCommand{
+		Queue:         queue,
+		ConsumerGroup: cgroup,
+		BlockUntil:    time.Now().Add(1 * time.Second),
+	}
+
+	assertBlockFor := func(d time.Duration) core.Event {
+		ch := make(chan core.Event)
+		go func() {
+			e, err := testPeel.QGet(cmd)
+			require.Nil(t, err)
+			ch <- e
+		}()
+
+		if d > 0 {
+			select {
+			case <-time.After(d):
+			case <-ch:
+				assert.Fail(t, "didn't block long enough")
+			}
+		}
+		select {
+		case <-time.After(100 * time.Millisecond):
+			assert.Fail(t, "blocked too long")
+		case e := <-ch:
+			return e
+		}
+		return core.Event{}
+	}
+
+	e := assertBlockFor(0)
+	assert.Equal(t, ee[0], e)
+
+	cmd.BlockUntil = time.Now().Add(1 * time.Second)
+	e = assertBlockFor(1 * time.Second)
+	assert.Equal(t, core.Event{}, e)
+
+	var e2 core.Event
+	cmd.BlockUntil = time.Now().Add(1 * time.Second)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		contents := testutil.RandStr()
+		id, err := testPeel.QAdd(QAddCommand{
+			Queue:    queue,
+			Expire:   time.Now().Add(10 * time.Minute),
+			Contents: contents,
+		})
+		require.Nil(t, err)
+		e2 = core.Event{ID: id, Contents: contents}
+	}()
+	e = assertBlockFor(500 * time.Millisecond)
+	assert.Equal(t, e2, e)
 }
 
 func TestQAck(t *T) {

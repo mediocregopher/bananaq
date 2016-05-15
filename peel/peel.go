@@ -25,6 +25,8 @@ func New(redisAddr string, poolSize int) (Peel, error) {
 	return Peel{c}, err
 }
 
+// TODO Peel Run command
+
 // Client describes the information attached to any given client of bananaq.
 // For most commands this isn't actually necessary, but for some it's actually
 // used (these will be documented as such)
@@ -81,25 +83,74 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		return 0, err
 	}
 
+	p.c.EventSetNotify(es)
+
 	return e.ID, nil
 }
 
 // QGetCommand describes the parameters which can be passed into the QGet
 // command
 type QGetCommand struct {
-	Client
 	Queue         string // Required
 	ConsumerGroup string // Required
 	AckDeadline   time.Time
+	BlockUntil    time.Time
+	ConsumerID    string
 }
 
+// TODO this API is kind of gross, the lenght of its docstring is evidence of
+// that. I'm doing a lot of work and adding a lot of API complexity to support
+// this Consumers field in the QStatus. I should consider how necessary that
+// really is, and if it's worth it. It's definitely a useful thing, but if I can
+// come up with another way to get that info that's similartly convenient,
+// that'd be ideal.
+
 // QGet retrieves an available event from the given queue for the given consumer
-// group. If AckDeadline is given, then the consumer has until then to QAck the
+// group.
+//
+// If AckDeadline is given, then the consumer has until then to QAck the
 // Event before it is placed back in the queue for this consumer group. If
 // AckDeadline is not set, then the Event will never be placed back, and QAck
-// isn't necessary..  An empty event is returned if there are no available
-// events for the queue.
+// isn't necessary.
+//
+// If no new event is currently available, but BlockUntil is given, this call
+// will block until an event becomes available, or until BlockUntil is reached,
+// whichever happens first. If BlockUntil is not given this call always returns
+// immediately, regardless of available events.
+//
+// If ConsumerID is given alongside BlockUntil, then it will be used as a unique
+// identifier to keep track of this consumer for the purposes of the Consumers
+// field in the QStatus return.
+//
+// An empty event is returned if there are no available events for the queue.
 func (p Peel) QGet(c QGetCommand) (core.Event, error) {
+	if c.BlockUntil.IsZero() {
+		return p.qgetDirect(c)
+	}
+
+	now := time.Now()
+	timeoutCh := time.After(c.BlockUntil.Sub(now))
+	esAvail := queueAvailable(c.Queue)
+
+	for {
+		stopCh := make(chan struct{})
+		pushCh := p.c.EventSetWait(esAvail, stopCh)
+
+		if e, err := p.qgetDirect(c); err != nil || e.ID != 0 {
+			return e, err
+		}
+
+		select {
+		case <-pushCh:
+		case <-timeoutCh:
+			return core.Event{}, nil
+		}
+
+		close(stopCh)
+	}
+}
+
+func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	now := time.Now()
 	esAvail := queueAvailable(c.Queue)
 	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
