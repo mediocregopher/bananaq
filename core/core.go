@@ -159,6 +159,7 @@ func (c *Core) NewID(t TS) (ID, error) {
 // immutable, nothing in this struct will ever change
 type Event struct {
 	ID       ID
+	Expire   TS
 	Contents string
 }
 

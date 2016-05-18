@@ -205,6 +205,24 @@ func TestQGet(t *T) {
 	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID)
 	assertEventSet(t, esDone, ee[2].ID, ee[3].ID, ee[4].ID, ee[5].ID)
 	assertEventSet(t, esRedo) // assert empty
+
+	// Now we're gonna do something mean, and insert an event with an expire
+	// which is before the most recent expire in done
+	contents := testutil.RandStr()
+	id, err := testPeel.QAdd(QAddCommand{
+		Queue: queue,
+		// TODO don't base this on ID, base it on expire
+		Expire:   core.TS(ee[5].ID).Time().Add(-5 * time.Second),
+		Contents: contents,
+	})
+	require.Nil(t, err)
+	e, err = testPeel.QGet(cmd)
+	require.Nil(t, err)
+	assert.Equal(t, core.Event{ID: id, Contents: contents}, e)
+	assertEventSet(t, esInProgID, ee[0].ID, ee[1].ID, id)
+	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID, id)
+	assertEventSet(t, esDone, ee[2].ID, ee[3].ID, ee[4].ID, ee[5].ID)
+	assertEventSet(t, esRedo) // assert empty
 }
 
 func TestQGetBlocking(t *T) {
