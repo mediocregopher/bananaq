@@ -111,10 +111,10 @@ func TestConsumerLoad(t *T) {
 		eeids[i] = ee[i].ID
 	}
 	llog.Info("checking inprogress sets")
-	assertEventSet(t, queueInProgressByID(queue, cgroup))
-	assertEventSet(t, queueInProgressByAck(queue, cgroup))
+	assertKey(t, queueInProgressByID(queue, cgroup))
+	assertKey(t, queueInProgressByAck(queue, cgroup))
 	llog.Info("checking redo set")
-	assertEventSet(t, queueRedo(queue, cgroup))
+	assertKey(t, queueRedo(queue, cgroup))
 	llog.Info("checking done set")
-	assertEventSet(t, queueDone(queue, cgroup), eeids...)
+	assertKey(t, queueDone(queue, cgroup), eeids...)
 }

@@ -6,41 +6,39 @@ import (
 	"github.com/mediocregopher/wublub"
 )
 
-// TODO I'm not super happy about this API. It's kind of gross. Really EventSet
+// TODO I'm not super happy about this API. It's kind of gross. Really Key
 // should be given a new name, probably just ZSet, and then things like Query
-// can treat it like an EventSet, but things like this could treat it like a
+// can treat it like an Key, but things like this could treat it like a
 // WaiterSet.
 
-// EventSetWait returns a channel which will be closed when the given EventSet
+// KeyWait returns a channel which will be closed when the given Key
 // is notified by some other process. stopCh can be closed to stop waiting and
 // immediately close the returned channel
-func (c *Core) EventSetWait(es EventSet, stopCh <-chan struct{}) <-chan struct{} {
+func (c *Core) KeyWait(k Key, stopCh <-chan struct{}) <-chan struct{} {
 	retCh := make(chan struct{})
 
 	go func() {
 		readCh := make(chan wublub.Publish, 1)
-		k := es.key()
-		c.w.Subscribe(readCh, k)
+		c.w.Subscribe(readCh, k.String())
 		select {
 		case <-readCh:
 		case <-stopCh:
 		}
 		close(retCh)
-		c.w.Unsubscribe(readCh, k)
+		c.w.Unsubscribe(readCh, k.String())
 	}()
 
 	return retCh
 }
 
-// EventSetNotify will notify all processes currently waiting on the given
-// EventSet using EventSetWait
-func (c *Core) EventSetNotify(es EventSet) {
-	c.w.Publish(wublub.Publish{Channel: es.key(), Message: "notify"})
+// KeyNotify will notify all processes currently waiting on the given
+// Key using KeyWait
+func (c *Core) KeyNotify(k Key) {
+	c.w.Publish(wublub.Publish{Channel: k.String(), Message: "notify"})
 }
 
-func (c *Core) esWaitersCmd(now TS, cmd string, es EventSet, args ...interface{}) *redis.Resp {
-	es.Subs = append(es.Subs, "waiters")
-	k := es.key()
+func (c *Core) esWaitersCmd(now TS, cmd string, k Key, args ...interface{}) *redis.Resp {
+	k.Subs = append(k.Subs, "waiters")
 
 	lua := `
 		redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
@@ -49,18 +47,18 @@ func (c *Core) esWaitersCmd(now TS, cmd string, es EventSet, args ...interface{}
 		return redis.call(unpack(argv))
 	`
 
-	return util.LuaEval(c.Cmder, lua, 1, k, now, cmd, k, args)
+	return util.LuaEval(c.Cmder, lua, 1, k, now, cmd, k.String(), args)
 }
 
-// EventSetStoreWaiter stores that the ID should be included with the rest of
-// the waiters in the set for this EventSet. The id will stop being included in
+// KeyStoreWaiter stores that the ID should be included with the rest of
+// the waiters in the set for this Key. The id will stop being included in
 // the set after until.
-func (c *Core) EventSetStoreWaiter(es EventSet, id string, now, until TS) error {
-	return c.esWaitersCmd(now, "ZADD", es, until, id).Err
+func (c *Core) KeyStoreWaiter(k Key, id string, now, until TS) error {
+	return c.esWaitersCmd(now, "ZADD", k, until, id).Err
 }
 
-// EventSetCountWaiters returns the number of waiters currently stored for the
-// given EventSet
-func (c *Core) EventSetCountWaiters(es EventSet, now TS) (int, error) {
-	return c.esWaitersCmd(now, "ZCARD", es).Int()
+// KeyCountWaiters returns the number of waiters currently stored for the
+// given Key
+func (c *Core) KeyCountWaiters(k Key, now TS) (int, error) {
+	return c.esWaitersCmd(now, "ZCARD", k).Int()
 }

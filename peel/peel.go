@@ -62,26 +62,26 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		return 0, err
 	}
 
-	esAvailID := queueAvailableByID(c.Queue)
-	esAvailEx := queueAvailableByExpire(c.Queue)
+	keyAvailID := queueAvailableByID(c.Queue)
+	keyAvailEx := queueAvailableByExpire(c.Queue)
 
 	qa := core.QueryActions{
-		EventSetBase: esAvailID.Base,
+		KeyBase: keyAvailID.Base,
 		QueryActions: []core.QueryAction{
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: esAvailID,
-					Events:   []core.Event{e},
+					Key:    keyAvailID,
+					Events: []core.Event{e},
 				},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{esAvailID},
+					Keys: []core.Key{keyAvailID},
 				},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets:     []core.EventSet{esAvailEx},
+					Keys:          []core.Key{keyAvailEx},
 					ExpireAsScore: true,
 				},
 			},
@@ -91,7 +91,7 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		return 0, err
 	}
 
-	p.c.EventSetNotify(esAvailID)
+	p.c.KeyNotify(keyAvailID)
 
 	return e.ID, nil
 }
@@ -145,11 +145,11 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 
 	now := time.Now()
 	timeoutCh := time.After(c.BlockUntil.Sub(now))
-	esAvail := queueAvailableByID(c.Queue)
+	keyAvailID := queueAvailableByID(c.Queue)
 
 	for {
 		stopCh := make(chan struct{})
-		pushCh := p.c.EventSetWait(esAvail, stopCh)
+		pushCh := p.c.KeyWait(keyAvailID, stopCh)
 
 		if e, err := p.qgetDirect(c); err != nil || e.ID != 0 {
 			return e, err
@@ -167,12 +167,12 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 
 func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	now := time.Now()
-	esAvailID := queueAvailableByID(c.Queue)
-	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
-	esInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
-	esRedo := queueRedo(c.Queue, c.ConsumerGroup)
-	esDone := queueDone(c.Queue, c.ConsumerGroup)
-	esInUse := queueInUseByExpire(c.Queue, c.ConsumerGroup)
+	keyAvailID := queueAvailableByID(c.Queue)
+	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
+	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
+	keyRedo := queueRedo(c.Queue, c.ConsumerGroup)
+	keyDone := queueDone(c.Queue, c.ConsumerGroup)
+	keyInUse := queueInUseByExpire(c.Queue, c.ConsumerGroup)
 
 	// Depending on if Expire is set, we might add the event to the inProgs or
 	// done
@@ -181,18 +181,18 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		inProgOrDone = []core.QueryAction{
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{esInProgID},
+					Keys: []core.Key{keyInProgID},
 				},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{esInProgAck},
-					Score:     core.NewTS(c.AckDeadline),
+					Keys:  []core.Key{keyInProgAck},
+					Score: core.NewTS(c.AckDeadline),
 				},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets:     []core.EventSet{esInUse},
+					Keys:          []core.Key{keyInUse},
 					ExpireAsScore: true,
 				},
 			},
@@ -201,12 +201,12 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		inProgOrDone = []core.QueryAction{
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{esDone},
+					Keys: []core.Key{keyDone},
 				},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets:     []core.EventSet{esInUse},
+					Keys:          []core.Key{keyInUse},
 					ExpireAsScore: true,
 				},
 			},
@@ -226,12 +226,12 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq,
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet:       esRedo,
+				Key:            keyRedo,
 				PosRangeSelect: []int64{0, 0},
 			},
 		},
 		core.QueryAction{
-			RemoveFrom: []core.EventSet{esRedo},
+			RemoveFrom: []core.Key{keyRedo},
 		},
 	)
 	qq = append(qq, inProgOrDone...)
@@ -241,20 +241,20 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq,
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet:       esInProgID,
+				Key:            keyInProgID,
 				PosRangeSelect: []int64{-1, -1},
 			},
 		},
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet:       esDone,
+				Key:            keyDone,
 				PosRangeSelect: []int64{-1, -1},
 				Union:          true,
 			},
 		},
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet: esAvailID,
+				Key: keyAvailID,
 				QueryEventRangeSelect: &core.QueryEventRangeSelect{
 					QueryScoreRange: core.QueryScoreRange{
 						MinFromInput: true,
@@ -279,16 +279,16 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	// thusfar
 	qq = append(qq, core.QueryAction{
 		QuerySelector: &core.QuerySelector{
-			EventSet:       esAvailID,
+			Key:            keyAvailID,
 			PosRangeSelect: []int64{0, 0},
 		},
 		QueryConditional: core.QueryConditional{
 			And: []core.QueryConditional{
 				{
-					IfEmpty: &esDone,
+					IfEmpty: &keyDone,
 				},
 				{
-					IfEmpty: &esInProgID,
+					IfEmpty: &keyInProgID,
 				},
 			},
 		},
@@ -296,7 +296,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq, inProgOrDone...)
 
 	qa := core.QueryActions{
-		EventSetBase: esAvailID.Base,
+		KeyBase:      keyAvailID.Base,
 		QueryActions: qq,
 		Now:          now,
 	}
@@ -328,16 +328,16 @@ type QAckCommand struct {
 func (p Peel) QAck(c QAckCommand) (bool, error) {
 	now := time.Now()
 
-	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
-	esInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
-	esDone := queueDone(c.Queue, c.ConsumerGroup)
+	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
+	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
+	keyDone := queueDone(c.Queue, c.ConsumerGroup)
 
 	qa := core.QueryActions{
-		EventSetBase: esDone.Base,
+		KeyBase: keyDone.Base,
 		QueryActions: []core.QueryAction{
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: esInProgAck,
+					Key: keyInProgAck,
 					QueryEventScoreSelect: &core.QueryEventScoreSelect{
 						Event: c.Event,
 						Min:   core.NewTS(now),
@@ -351,11 +351,11 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 				},
 			},
 			{
-				RemoveFrom: []core.EventSet{esInProgID, esInProgAck},
+				RemoveFrom: []core.Key{keyInProgID, keyInProgAck},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{esDone},
+					Keys: []core.Key{keyDone},
 				},
 			},
 		},
@@ -377,34 +377,34 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
 
-	esInProgID := queueInProgressByID(queue, consumerGroup)
-	esInProgAck := queueInProgressByAck(queue, consumerGroup)
-	esDone := queueDone(queue, consumerGroup)
-	esRedo := queueRedo(queue, consumerGroup)
-	esInUse := queueInUseByExpire(queue, consumerGroup)
+	keyInProgID := queueInProgressByID(queue, consumerGroup)
+	keyInProgAck := queueInProgressByAck(queue, consumerGroup)
+	keyDone := queueDone(queue, consumerGroup)
+	keyRedo := queueRedo(queue, consumerGroup)
+	keyInUse := queueInUseByExpire(queue, consumerGroup)
 
 	qsr := core.QueryScoreRange{
 		Max: nowTS,
 	}
 	qa := core.QueryActions{
-		EventSetBase: esDone.Base,
+		KeyBase: keyDone.Base,
 		QueryActions: []core.QueryAction{
 			// First find all events who missed their ack deadline, remove them
 			// from both inProgs and add them to redo
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: esInProgAck,
+					Key: keyInProgAck,
 					QueryEventRangeSelect: &core.QueryEventRangeSelect{
 						QueryScoreRange: qsr,
 					},
 				},
 			},
 			{
-				RemoveFrom: []core.EventSet{esInProgAck, esInProgID},
+				RemoveFrom: []core.Key{keyInProgAck, keyInProgID},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{esRedo},
+					Keys: []core.Key{keyRedo},
 				},
 			},
 
@@ -412,19 +412,19 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 			// remove them from all of our sets
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: esInUse,
+					Key: keyInUse,
 					QueryEventRangeSelect: &core.QueryEventRangeSelect{
 						QueryScoreRange: qsr,
 					},
 				},
 			},
 			{
-				RemoveFrom: []core.EventSet{
-					esInProgAck,
-					esInProgID,
-					esDone,
-					esRedo,
-					esInUse,
+				RemoveFrom: []core.Key{
+					keyInProgAck,
+					keyInProgID,
+					keyDone,
+					keyRedo,
+					keyInUse,
 				},
 			},
 		},
@@ -444,14 +444,14 @@ func (p Peel) CleanAvailable(queue string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
 
-	esAvailID := queueAvailableByID(queue)
-	esAvailEx := queueAvailableByExpire(queue)
+	keyAvailID := queueAvailableByID(queue)
+	keyAvailEx := queueAvailableByExpire(queue)
 	qa := core.QueryActions{
-		EventSetBase: esAvailID.Base,
+		KeyBase: keyAvailID.Base,
 		QueryActions: []core.QueryAction{
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: esAvailEx,
+					Key: keyAvailEx,
 					QueryEventRangeSelect: &core.QueryEventRangeSelect{
 						QueryScoreRange: core.QueryScoreRange{
 							Max: nowTS,
@@ -460,7 +460,7 @@ func (p Peel) CleanAvailable(queue string) error {
 				},
 			},
 			{
-				RemoveFrom: []core.EventSet{esAvailID, esAvailEx},
+				RemoveFrom: []core.Key{keyAvailID, keyAvailEx},
 			},
 		},
 		Now: now,
@@ -504,13 +504,13 @@ type QueueStats struct {
 // QStatus returns information about the given queues relative to the given
 // consumer group. See the QueueStats docs for more on what exactly is returned.
 func (p Peel) QStatus(c QStatusCommand) (QueueStats, error) {
-	esAvailID := queueAvailableByID(c.Queue)
-	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
-	esRedo := queueRedo(c.Queue, c.ConsumerGroup)
-	esDone := queueDone(c.Queue, c.ConsumerGroup)
+	keyAvailID := queueAvailableByID(c.Queue)
+	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
+	keyRedo := queueRedo(c.Queue, c.ConsumerGroup)
+	keyDone := queueDone(c.Queue, c.ConsumerGroup)
 
 	var qs QueueStats
-	counts, err := p.c.EventSetCounts(esAvailID, esInProgID, esRedo, esDone)
+	counts, err := p.c.SetCounts(keyAvailID, keyInProgID, keyRedo, keyDone)
 	if err != nil {
 		return qs, err
 	}

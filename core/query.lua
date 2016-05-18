@@ -4,13 +4,13 @@ local function debug(wat)
     redis.call("SET", "debug", cjson.encode(wat))
 end
 
-local function eventSetKey(es)
-    local k = "eventset:{"
-    k = k .. es.Base .. "}"
-    for i = 1,#es.Subs do
-        k = k .. ":" .. es.Subs[i]
+local function keyString(k)
+    local str = "bananaq:{"
+    str = str .. k.Base .. "}"
+    for i = 1,#k.Subs do
+        str = str .. ":" .. k.Subs[i]
     end
-    return k
+    return str
 end
 
 local function expandEvent(e)
@@ -62,7 +62,7 @@ local query_select
 -- a boolean indicating if the result set needs expanding. Should only be called
 -- by query_select
 local function query_select_inner(input, qs)
-    local esKey = eventSetKey(qs.EventSet)
+    local key = keyString(qs.Key)
     if qs.QueryEventRangeSelect then
         local qe = qs.QueryEventRangeSelect
         local min, max = query_score_range(input, qe.QueryScoreRange)
@@ -75,9 +75,9 @@ local function query_select_inner(input, qs)
 
         local ret
         if qe.Limit ~= 0 then
-            ret = redis.call(zrangebyscore, esKey, min, max, "LIMIT", qe.Offset, qe.Limit)
+            ret = redis.call(zrangebyscore, key, min, max, "LIMIT", qe.Offset, qe.Limit)
         else
-            ret = redis.call(zrangebyscore, esKey, min, max)
+            ret = redis.call(zrangebyscore, key, min, max)
         end
         --debug({ret=ret, esKey=esKey, cmd=zrangebyscore, min=min, max=max})
         return ret
@@ -85,7 +85,7 @@ local function query_select_inner(input, qs)
     elseif qs.QueryEventScoreSelect then
         local qes = qs.QueryEventScoreSelect
         local e = expandEvent(qes.Event)
-        local scoreRaw = redis.call("ZSCORE", esKey, e.packed)
+        local scoreRaw = redis.call("ZSCORE", key, e.packed)
         if not scoreRaw then return {} end
         local score = tonumber(scoreRaw)
 
@@ -96,7 +96,7 @@ local function query_select_inner(input, qs)
 
     elseif #qs.PosRangeSelect > 0 then
         local pr = qs.PosRangeSelect
-        return redis.call("ZRANGE", esKey, pr[1], pr[2])
+        return redis.call("ZRANGE", key, pr[1], pr[2])
 
     elseif qs.Events then
         return qs.Events
@@ -170,11 +170,11 @@ local function query_conditional(input, qc)
     if qc.IfNoInput and #input > 0 then return false end
     if qc.IfInput and #input == 0 then return false end
     if qc.IfEmpty then
-        local key = eventSetKey(qc.IfEmpty)
+        local key = keyString(qc.IfEmpty)
         if redis.call("ZCARD", key) > 0 then return false end
     end
     if qc.IfNotEmpty then
-        local key = eventSetKey(qc.IfNotEmpty)
+        local key = keyString(qc.IfNotEmpty)
         if redis.call("ZCARD", key) == 0 then return false end
     end
     return true
@@ -189,13 +189,13 @@ local function query_action(input, qa)
     if qa.QuerySelector then return query_select(input, qa.QuerySelector), false end
 
     if qa.QueryAddTo then
-        for i = 1, #qa.QueryAddTo.EventSets do
-            local esKey = eventSetKey(qa.QueryAddTo.EventSets[i])
+        for i = 1, #qa.QueryAddTo.Keys do
+            local key = keyString(qa.QueryAddTo.Keys[i])
             for i = 1, #input do
                 local score = input[i].ID
                 if qa.QueryAddTo.ExpireAsScore then score = input[i].Expire end
                 if qa.QueryAddTo.Score > 0 then score = qa.QueryAddTo.Score end
-                redis.call("ZADD", esKey, score, input[i].packed)
+                redis.call("ZADD", key, score, input[i].packed)
             end
         end
         return input, false
@@ -203,9 +203,9 @@ local function query_action(input, qa)
 
     if #qa.RemoveFrom > 0 then
         for i = 1, #qa.RemoveFrom do
-            local esKey = eventSetKey(qa.RemoveFrom[i])
+            local key = keyString(qa.RemoveFrom[i])
             for i = 1, #input do
-                redis.call("ZREM", esKey, input[i].packed)
+                redis.call("ZREM", key, input[i].packed)
             end
         end
         return input, false
@@ -214,9 +214,9 @@ local function query_action(input, qa)
     if qa.QueryRemoveByScore then
         local qrems = qa.QueryRemoveByScore
         local min, max = query_score_range(input, qrems.QueryScoreRange)
-        for i = 1, #qrems.EventSets do
-            local esKey = eventSetKey(qrems.EventSets[i])
-            redis.call("ZREMRANGEBYSCORE", esKey, min, max)
+        for i = 1, #qrems.Keys do
+            local key = keyString(qrems.Keys[i])
+            redis.call("ZREMRANGEBYSCORE", key, min, max)
         end
         return input, false
     end

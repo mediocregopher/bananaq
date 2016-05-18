@@ -9,13 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEventSetWait(t *T) {
-	// Make sure notifying on EventSets which don't have waiters is fine
+func TestKeyWait(t *T) {
+	// Make sure notifying on Keys which don't have waiters is fine
 	base := testutil.RandStr()
-	es1 := randEventSet(base)
-	es2 := randEventSet(base)
-	testCore.EventSetNotify(es1)
-	testCore.EventSetNotify(es2)
+	k1 := randKey(base)
+	k2 := randKey(base)
+	testCore.KeyNotify(k1)
+	testCore.KeyNotify(k2)
 
 	// This test shouldn't take too long
 	go func() {
@@ -25,26 +25,26 @@ func TestEventSetWait(t *T) {
 
 	ch1 := make(chan bool, 1)
 	go func() {
-		<-testCore.EventSetWait(es1, nil)
+		<-testCore.KeyWait(k1, nil)
 		ch1 <- true
 	}()
 
 	ch2 := make(chan bool, 1)
 	go func() {
-		<-testCore.EventSetWait(es1, nil)
+		<-testCore.KeyWait(k1, nil)
 		ch2 <- true
 	}()
 
 	ch3 := make(chan bool, 1)
 	go func() {
-		<-testCore.EventSetWait(es2, nil)
+		<-testCore.KeyWait(k2, nil)
 		ch3 <- true
 	}()
 
 	ch4 := make(chan bool, 1)
 	ch4stop := make(chan struct{})
 	go func() {
-		<-testCore.EventSetWait(randEventSet(base), ch4stop)
+		<-testCore.KeyWait(randKey(base), ch4stop)
 		ch4 <- true
 	}()
 
@@ -72,13 +72,13 @@ func TestEventSetWait(t *T) {
 	assertBlocking(ch3)
 	assertBlocking(ch4)
 
-	testCore.EventSetNotify(es1)
+	testCore.KeyNotify(k1)
 	assertNotBlocking(ch1)
 	assertNotBlocking(ch2)
 	assertBlocking(ch3)
 	assertBlocking(ch4)
 
-	testCore.EventSetNotify(es2)
+	testCore.KeyNotify(k2)
 	assertNotBlocking(ch3)
 	assertBlocking(ch4)
 
@@ -89,20 +89,20 @@ func TestEventSetWait(t *T) {
 func TestStoreWaiters(t *T) {
 	id1 := testutil.RandStr()
 	id2 := testutil.RandStr()
-	es := randEventSet(testutil.RandStr())
+	es := randKey(testutil.RandStr())
 
 	now := NewTS(time.Now())
 	assertCount := func(c int) {
-		cc, err := testCore.EventSetCountWaiters(es, now)
+		cc, err := testCore.KeyCountWaiters(es, now)
 		require.Nil(t, err)
 		assert.Equal(t, c, cc)
 	}
 	assertCount(0)
 
 	now = NewTS(time.Now())
-	err := testCore.EventSetStoreWaiter(es, id1, now, NewTS(time.Now().Add(1*time.Second)))
+	err := testCore.KeyStoreWaiter(es, id1, now, NewTS(time.Now().Add(1*time.Second)))
 	require.Nil(t, err)
-	err = testCore.EventSetStoreWaiter(es, id2, now, NewTS(time.Now().Add(5*time.Second)))
+	err = testCore.KeyStoreWaiter(es, id2, now, NewTS(time.Now().Add(5*time.Second)))
 	require.Nil(t, err)
 	assertCount(2)
 

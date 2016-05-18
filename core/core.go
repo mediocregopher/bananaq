@@ -11,6 +11,7 @@ package core
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,9 +119,19 @@ func (ts TS) Time() time.Time {
 	return time.Unix(0, int64(ts)*1e3)
 }
 
+// String returns the string form of a TS
+func (ts TS) String() string {
+	return strconv.FormatUint(uint64(ts), 10)
+}
+
 // ID identifies a single event across the entire cluster, and is unique for all
 // time. It also represents the point in time at which an event will expire
 type ID TS
+
+// String returns the string form of the ID
+func (id ID) String() string {
+	return TS(id).String()
+}
 
 // NewID returns a new, unique ID corresponding to the given timestamp, which
 // can be used for a new event. All IDs are monotonically increasing across the
@@ -187,10 +198,6 @@ func (c *Core) NewEvent(expire TS, contents string) (Event, error) {
 	}, nil
 }
 
-func eventKey(id ID, typ string) string {
-	return fmt.Sprintf("event:{%d}:%s", id, typ)
-}
-
 func pexpireAt(t TS, buffer time.Duration) int64 {
 	return t.Time().Add(buffer).UnixNano() / 1e6 // to millisecond
 }
@@ -199,7 +206,7 @@ func pexpireAt(t TS, buffer time.Duration) int64 {
 // event will expire based on the ID field in it (which will be truncated to an
 // integer) added with the given buffer
 func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
-	k := eventKey(e.ID, "event")
+	k := Key{Base: e.ID.String(), Subs: []string{"event"}}
 	pex := pexpireAt(TS(e.ID), expireBuffer)
 	lua := `
 		local key = KEYS[1]
@@ -212,7 +219,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c.Cmder, lua, 1, k, pex, eb).Err
+		err = util.LuaEval(c.Cmder, lua, 1, k.String(), pex, eb).Err
 	}, &e)
 	return err
 }
@@ -220,7 +227,8 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 // GetEvent returns the event identified by the given id, or ErrNotFound if it's
 // expired or never existed
 func (c *Core) GetEvent(id ID) (Event, error) {
-	r := c.Cmd("GET", eventKey(id, "event"))
+	k := Key{Base: id.String(), Subs: []string{"event"}}
+	r := c.Cmd("GET", k.String())
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}
@@ -241,39 +249,41 @@ type Events struct {
 	Events []Event
 }
 
-// EventSet describes identifying information for a set of events being stored.
-// EventSets with the same Base will be stored together and can be interacted
-// with transactionally. Subs is used a further set of identifiers for the
-// EventSet. EventSets don't actually store the Contents of an Event, but they
-// do contain all other fields of an Event.
+// Key describes a location some data can be stored in in redis. Keys with the
+// same Base will be stored together and can be interacted with transactionally.
+// Subs is used a further set of identifiers for the Key.
 //
-// All strings in EventSet should be alphanumeric, and none should be empty
-type EventSet struct {
+// All strings in Key should be alphanumeric, and none should be empty
+type Key struct {
 	Base string
 	Subs []string
 }
 
-// If this changes remember to change it in Query as well
-func (es EventSet) key() string {
-	if len(es.Subs) > 0 {
-		return fmt.Sprintf("eventset:{%s}:%s", es.Base, strings.Join(es.Subs, ":"))
+// String returns the string form of the Key, as it will appear in redis
+func (k Key) String() string {
+	// If this changes remember to change it in Query as well
+	if len(k.Subs) > 0 {
+		return fmt.Sprintf("bananaq:{%s}:%s", k.Base, strings.Join(k.Subs, ":"))
 	}
-	return fmt.Sprintf("eventset:{%s}", es.Base)
+	return fmt.Sprintf("bananaq:{%s}", k.Base)
 }
 
-func eventSetFromKey(key string) EventSet {
-	var es EventSet
+// KeyFromString takes the string form of a Key and returns the associated
+// String. Will probably panic if the given string is not valid, so check
+// yourself before you wreck yourself.
+func KeyFromString(key string) Key {
+	var k Key
 	i, j := strings.Index(key, "{"), strings.Index(key, "}")
-	es.Base = key[i+1 : j]
+	k.Base = key[i+1 : j]
 	if len(key) > j+1 {
-		es.Subs = strings.Split(key[j+2:], ":")
+		k.Subs = strings.Split(key[j+2:], ":")
 	}
-	return es
+	return k
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// wherein I develop what amounts to a DSL for working with multiple EventSet's
+// wherein I develop what amounts to a DSL for working with multiple Key's
 // contents transactionally
 
 // QueryScoreRange is used by multiple selectors to describe a range of Events
@@ -295,7 +305,7 @@ type QueryScoreRange struct {
 }
 
 // QueryEventRangeSelect is used to select all Events within the given range
-// from an EventSet.
+// from a Key.
 type QueryEventRangeSelect struct {
 	QueryScoreRange
 
@@ -308,10 +318,10 @@ type QueryEventRangeSelect struct {
 	Reverse bool
 }
 
-// QueryEventScoreSelect pulls the given Event from an EventSet. If the Event is
-// not in the EventSet there is no output. If the Event is in the EventSet but
-// its score does not match whatever conditions are set by Min/Max/Equal there
-// is no output. Otherwise the output is the single Event.
+// QueryEventScoreSelect pulls the given Event from a Key. If the Event is not
+// in the Key there is no output. If the Event is in the Key but its score does
+// not match whatever conditions are set by Min/Max/Equal there is no output.
+// Otherwise the output is the single Event.
 type QueryEventScoreSelect struct {
 	Event Event
 	Min   TS
@@ -320,10 +330,10 @@ type QueryEventScoreSelect struct {
 }
 
 // QuerySelector describes a set of criteria for selecting a set of Events from
-// an EventSet. EventSet is a required field, only one field apart from it
-// should be set in this selector (unless otherwise noted)
+// a Key. Key is a required field, only one field apart from it should be set in
+// this selector (unless otherwise noted)
 type QuerySelector struct {
-	EventSet
+	Key
 
 	// See QueryEventRangeSelect doc string
 	*QueryEventRangeSelect
@@ -331,7 +341,7 @@ type QuerySelector struct {
 	// See QueryEventScoreSelect doc string
 	*QueryEventScoreSelect
 
-	// Select Events by their position with the EventSet, using two element
+	// Select Events by their position within the Key, using a two element
 	// slice. 0 is the oldest id, 1 is the second oldest, etc... -1 is the
 	// youngest, -2 the second youngest, etc...
 	PosRangeSelect []int64
@@ -376,36 +386,35 @@ type QueryConditional struct {
 	// empty input through
 	IfInput bool
 
-	// Only do the QueryAction if the given EventSet has no events in it
-	IfEmpty *EventSet
+	// Only do the QueryAction if the given Key has no events in it
+	IfEmpty *Key
 
-	// Only do the QueryAction if the given EventSet has one or more events in
-	// it
-	IfNotEmpty *EventSet
+	// Only do the QueryAction if the given Key has one or more events in it
+	IfNotEmpty *Key
 }
 
-// QueryAddTo adds its input Events to the given EventSets. If ExpireAsScore is
-// set to true, then each Event's expire time will be used as its score. If
-// Score is given it will be used as the score for all Events being added,
-// otherwise the ID of each individual Event will be used
+// QueryAddTo adds its input Events to the given Keys. If ExpireAsScore is set
+// to true, then each Event's expire time will be used as its score. If Score is
+// given it will be used as the score for all Events being added, otherwise the
+// ID of each individual Event will be used
 type QueryAddTo struct {
-	EventSets     []EventSet
+	Keys          []Key
 	ExpireAsScore bool
 	Score         TS
 }
 
-// QueryRemoveByScore is used to remove Events from EventSets based on a range
-// of scores. This action does not change the input in anyway, it simply passes
-// the input through as its output.
+// QueryRemoveByScore is used to remove Events from Keys based on a range of
+// scores. This action does not change the input in anyway, it simply passes the
+// input through as its output.
 type QueryRemoveByScore struct {
-	EventSets []EventSet
+	Keys []Key
 	QueryScoreRange
 }
 
 // QueryAction describes a single action to take on a set of events. Every
 // action has an input and an output, which are both always sorted
-// chronologically. Only one single field, apart from QueryConditional, should
-// be set on a QueryAction.
+// chronologically (by ID). Only one single field, apart from QueryConditional,
+// should be set on a QueryAction.
 type QueryAction struct {
 	// Selects a set of Events using various types of logic. See the doc on
 	// QuerySelector for more. By default, a QuerySelector causes this
@@ -413,15 +422,14 @@ type QueryAction struct {
 	// output.
 	*QuerySelector
 
-	// Adds the input Events to the given EventSets. See its doc string for more
-	// info
+	// Adds the input Events to the given Keys. See its doc string for more info
 	*QueryAddTo
 
-	// Removes Events from EventSets by score. See its doc string for more info
+	// Removes Events from Keys by score. See its doc string for more info
 	*QueryRemoveByScore
 
-	// Removes the input Events from the given EventSets
-	RemoveFrom []EventSet
+	// Removes the input Events from the given Keys
+	RemoveFrom []Key
 
 	// Filters Events out of the input. See its doc string for more info
 	*QueryFilter
@@ -441,9 +449,8 @@ type QueryAction struct {
 // should always have a QuerySelector to start things off. The final
 // QueryAction's output will be the output set of Events from the Query method.
 type QueryActions struct {
-	// This must match the Base field on all EventSets being used in this
-	// pipeline
-	EventSetBase string
+	// This must match the Base field on all Keys being used in this pipeline
+	KeyBase      string
 	QueryActions []QueryAction
 
 	// Optional, may be passed in if there is a previous notion of "current
@@ -464,8 +471,8 @@ func (c *Core) Query(qas QueryActions) ([]Event, error) {
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
-		key := EventSet{Base: qas.EventSetBase}.key()
-		eeb, err = util.LuaEval(c.Cmder, string(queryLua), 1, key, nowb, qasb).Bytes()
+		k := Key{Base: qas.KeyBase}
+		eeb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k.String(), nowb, qasb).Bytes()
 	}, NewTS(qas.Now), &qas)
 	if err != nil {
 		return nil, err
@@ -482,16 +489,16 @@ func (c *Core) Query(qas QueryActions) ([]Event, error) {
 	return ee.Events, nil
 }
 
-// EventSetCounts returns a slice with a number corresponding to the number of
-// Events in each given EventSet
-func (c *Core) EventSetCounts(es ...EventSet) ([]uint64, error) {
-	if len(es) == 0 {
+// SetCounts returns a slice with a number corresponding to the number of Events
+// in each given Key, where each Key contains a set of events.
+func (c *Core) SetCounts(kk ...Key) ([]uint64, error) {
+	if len(kk) == 0 {
 		return []uint64{}, nil
 	}
 
-	keys := make([]string, len(es))
-	for i := range es {
-		keys[i] = es[i].key()
+	keys := make([]string, len(kk))
+	for i := range kk {
+		keys[i] = kk[i].String()
 	}
 
 	lua := `
