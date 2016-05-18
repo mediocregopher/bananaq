@@ -17,6 +17,11 @@ func init() {
 		panic(err)
 	}
 	go func() { panic(testCore.Run()) }()
+
+	// We set idKey to be random because this package's tests assume they are
+	// the only thing calling NewID. But if tests for other sub-packages in
+	// bananaq are also running they will be calling it too.
+	idKey = idKey + ":" + testutil.RandStr()
 }
 
 func TestNewID(t *T) {
@@ -118,6 +123,27 @@ func assertEventSet(t *T, es EventSet, ee ...Event) {
 	assert.Equal(t, ee, ee2)
 }
 
+// Assert the contents of an eventset as well as their scores
+func assertEventSetRaw(t *T, es EventSet, exm map[Event]int64) {
+	arr, err := testCore.Cmd("ZRANGE", es.key(), 0, -1, "WITHSCORES").Array()
+	require.Nil(t, err)
+
+	m := map[Event]int64{}
+	for i := 0; i < len(arr); i += 2 {
+		eb, err := arr[i].Bytes()
+		require.Nil(t, err)
+		score, err := arr[i+1].Int64()
+		require.Nil(t, err)
+
+		var e Event
+		_, err = e.UnmarshalMsg(eb)
+		require.Nil(t, err)
+
+		m[e] = score
+	}
+	assert.Equal(t, exm, m)
+}
+
 func TestGetSetEvent(t *T) {
 	contents := testutil.RandStr()
 	expire := time.Now().Add(500 * time.Millisecond)
@@ -173,6 +199,67 @@ func TestQueryBasicAddRemove(t *T) {
 	})
 	require.Nil(t, err)
 	assertEventSet(t, es, ee[0], ee[2])
+}
+
+func TestQueryAddScores(t *T) {
+	base := testutil.RandStr()
+	es1 := randEventSet(base)
+	es2 := randEventSet(base)
+	es3 := randEventSet(base)
+	ee := []Event{
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+		requireNewEmptyEvent(t),
+	}
+	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
+
+	ee2, err := testCore.Query(QueryActions{
+		EventSetBase: base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{Events: ee},
+			},
+			{
+				QueryAddTo: &QueryAddTo{
+					EventSets: []EventSet{es1},
+				},
+			},
+			{
+				QueryAddTo: &QueryAddTo{
+					EventSets:     []EventSet{es2},
+					ExpireAsScore: true,
+				},
+			},
+			{
+				QueryAddTo: &QueryAddTo{
+					EventSets: []EventSet{es3},
+					Score:     5,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, ee, ee2)
+	assertEventSetRaw(t, es1, map[Event]int64{
+		ee[0]: int64(ee[0].ID),
+		ee[1]: int64(ee[1].ID),
+		ee[2]: int64(ee[2].ID),
+		ee[3]: int64(ee[3].ID),
+	})
+	assertEventSetRaw(t, es2, map[Event]int64{
+		ee[0]: int64(ee[0].Expire),
+		ee[1]: int64(ee[1].Expire),
+		ee[2]: int64(ee[2].Expire),
+		ee[3]: int64(ee[3].Expire),
+	})
+	assertEventSetRaw(t, es3, map[Event]int64{
+		ee[0]: 5,
+		ee[1]: 5,
+		ee[2]: 5,
+		ee[3]: 5,
+	})
 }
 
 func TestQueryRemoveByScore(t *T) {
@@ -422,8 +509,8 @@ func TestQueryFiltering(t *T) {
 		requireNewEmptyEvent(t),
 		requireNewEmptyEvent(t),
 	}
-	ee[1].ID = ID(NewTS(time.Now().Add(-1 * time.Second)))
-	ee[3].ID = ID(NewTS(time.Now().Add(-1 * time.Second)))
+	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
 
 	ee2, err := testCore.Query(QueryActions{
 		EventSetBase: es.Base,

@@ -149,7 +149,7 @@ local function query_filter(input, qf)
         local e = input[i]
         local filter
         if qf.Expired then
-            filter = e.ID <= nowTS
+            filter = e.Expire <= nowTS
         end
         -- ~= is not equals, which is synonomous with xor
         filter = filter ~= qf.Invert
@@ -193,6 +193,7 @@ local function query_action(input, qa)
             local esKey = eventSetKey(qa.QueryAddTo.EventSets[i])
             for i = 1, #input do
                 local score = input[i].ID
+                if qa.QueryAddTo.ExpireAsScore then score = input[i].Expire end
                 if qa.QueryAddTo.Score > 0 then score = qa.QueryAddTo.Score end
                 redis.call("ZADD", esKey, score, input[i].packed)
             end

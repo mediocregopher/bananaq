@@ -97,6 +97,8 @@ func (c *Core) Run() error {
 	return c.w.Run()
 }
 
+var idKey = "id"
+
 // TS identifies a single point in time as an integer number of microseconds
 type TS uint64
 
@@ -120,39 +122,46 @@ func (ts TS) Time() time.Time {
 // time. It also represents the point in time at which an event will expire
 type ID TS
 
-func pexpireAt(t TS, buffer time.Duration) int64 {
-	return t.Time().Add(buffer).UnixNano() / 1e6 // to millisecond
-}
-
-func eventKey(id ID, typ string) string {
-	return fmt.Sprintf("event:{%d}:%s", id, typ)
-}
-
-var newIDLua = `
-	local key = KEYS[1]
-	local pexpire = ARGV[1]
-	if not redis.call("SET", key, 1, "NX") then return nil end
-	redis.call("PEXPIREAT", key, pexpire)
-	return "OK"
-`
-
 // NewID returns a new, unique ID corresponding to the given timestamp, which
-// can be used for a new event. All IDs are unique across the cluster.
-// Consequently, the ID returned might differ in the time it represents from the
-// given TS by a very small amount.
-func (c *Core) NewID(t TS) (ID, error) {
-	for {
-		id := ID(t)
-		k := eventKey(id, "id")
-		pex := pexpireAt(t, 30*time.Second)
-		r := util.LuaEval(c.Cmder, newIDLua, 1, k, pex)
-		if r.Err != nil {
-			return 0, r.Err
-		} else if !r.IsType(redis.Nil) {
-			return ID(t), nil
-		}
-		t++
-	}
+// can be used for a new event. All IDs are monotonically increasing across the
+// entire cluster. Consequently, the ID returned might differ in the time it
+// represents from the given TS by a very small amount (or a big amount, if the
+// given time is way in the past).
+func (c Core) NewID(t TS) (ID, error) {
+	lua := `
+		local key = KEYS[1]
+		local now_raw = ARGV[1]
+		local now = cmsgpack.unpack(now_raw)
+		local last_raw = redis.call("GET", key)
+
+		if not last_raw then
+			redis.call("SET", key, now_raw)
+			return now_raw
+		end
+
+		local last = cmsgpack.unpack(last_raw)
+		if last < now then
+			redis.call("SET", key, now_raw)
+			return now_raw
+		end
+
+		-- Add a microsecond and use that
+		last = last + 1
+		last_raw = cmsgpack.pack(last)
+		redis.call("SET", key, last_raw)
+		return last_raw
+	`
+
+	var ib []byte
+	var err error
+	withMarshaled(func(bb [][]byte) {
+		nowb := bb[0]
+		ib, err = util.LuaEval(c.Cmder, lua, 1, idKey, nowb).Bytes()
+	}, t)
+
+	var id ID
+	_, err = id.UnmarshalMsg(ib)
+	return id, err
 }
 
 // Event describes all the information related to a single event. An event is
@@ -166,15 +175,24 @@ type Event struct {
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
 func (c *Core) NewEvent(expire TS, contents string) (Event, error) {
-	id, err := c.NewID(expire)
+	id, err := c.NewID(NewTS(time.Now()))
 	if err != nil {
 		return Event{}, err
 	}
 
 	return Event{
 		ID:       id,
+		Expire:   expire,
 		Contents: contents,
 	}, nil
+}
+
+func eventKey(id ID, typ string) string {
+	return fmt.Sprintf("event:{%d}:%s", id, typ)
+}
+
+func pexpireAt(t TS, buffer time.Duration) int64 {
+	return t.Time().Add(buffer).UnixNano() / 1e6 // to millisecond
 }
 
 // SetEvent sets the event with the given id to have the given contents. The
@@ -366,12 +384,14 @@ type QueryConditional struct {
 	IfNotEmpty *EventSet
 }
 
-// QueryAddTo adds its input Events to the given EventSets. If Score is given it
-// will be used as the score for all Events being added, otherwise the ID of
-// each individual Event will be used
+// QueryAddTo adds its input Events to the given EventSets. If ExpireAsScore is
+// set to true, then each Event's expire time will be used as its score. If
+// Score is given it will be used as the score for all Events being added,
+// otherwise the ID of each individual Event will be used
 type QueryAddTo struct {
-	EventSets []EventSet
-	Score     TS
+	EventSets     []EventSet
+	ExpireAsScore bool
+	Score         TS
 }
 
 // QueryRemoveByScore is used to remove Events from EventSets based on a range
