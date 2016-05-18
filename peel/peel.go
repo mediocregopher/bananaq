@@ -4,6 +4,7 @@
 package peel
 
 import (
+	"log"
 	"time"
 
 	"github.com/mediocregopher/bananaq/core"
@@ -61,20 +62,27 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		return 0, err
 	}
 
-	es := queueAvailable(c.Queue)
+	esAvailID := queueAvailableByID(c.Queue)
+	esAvailEx := queueAvailableByExpire(c.Queue)
 
 	qa := core.QueryActions{
-		EventSetBase: es.Base,
+		EventSetBase: esAvailID.Base,
 		QueryActions: []core.QueryAction{
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: es,
+					EventSet: esAvailID,
 					Events:   []core.Event{e},
 				},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
-					EventSets: []core.EventSet{es},
+					EventSets: []core.EventSet{esAvailID},
+				},
+			},
+			{
+				QueryAddTo: &core.QueryAddTo{
+					EventSets:     []core.EventSet{esAvailEx},
+					ExpireAsScore: true,
 				},
 			},
 		},
@@ -83,7 +91,7 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		return 0, err
 	}
 
-	p.c.EventSetNotify(es)
+	p.c.EventSetNotify(esAvailID)
 
 	return e.ID, nil
 }
@@ -105,77 +113,12 @@ type QGetCommand struct {
 // come up with another way to get that info that's similartly convenient,
 // that'd be ideal.
 
-// TODO this method is kind of very broken. In a really unfortunate way. If I
-// add an event to a queue, qget that event, then add another event with a //
-// sooner expiration than the first, I'll never see that second event. I
-// literally don't know how to fix this at this point...
-//
-// So the issue is there's two ways I could go about this:
-//
-// * Have the id as the expiration. This leads to the above problem. I like
-//   having the expiration as the ID, it leads to some problems with the order
-//   the events are returned in. But it *feels* clean, which may or may not be
-//   worth anything
-//
-// * Have the id and expiration as two separate numbers. The problem with that
-//   plan is that it makes things kind of weird. For some sorted sets I need the
-//   events sorted by id, but I also need to clean events out of them by
-//   expiration. The biggest problem is with available. It *needs* to be ordered
-//   by insertion time, no matter what. But cleaning by expiration is also
-//   definitely required too. I think solving this problem (figuring out how to
-//   clean available by expiration, but order it by insertion) will solve most
-//   of my problems.
-//
-//		- The naive solution is to just order by id, then iterate over it when
-//		  cleaning needs to be done. This obviously super sucks. It could be
-//		  made slightly better by only pulling chunks off the start in a loop,
-//		  and stopping the loop once I reach a chunk with no expired events.
-//		  If there's some cluster of events with some outlandish expirations
-//		  this could get thrown for a loop though, also it's gross.
-//
-//		- Another sorta neive solution is to keep two sorted sets per queue.
-//		  This also rather sucks.
-//
-//		- So what this problem ultimately breaks down into is that I have two
-//		  times per event that I care about. The first is the time it was
-//		  created. The second is the time it expires. I need to keep track of
-//		  events sorted by both. Do I?
-//
-//		  With the creation time what I ultimately need to do is be able to say
-//		  "If this event was created before this other one, it should be handed
-//		  out first." This isn't a user-based requirement. It allows me to do
-//		  things like say "if this event is 'done' for a particular consumer
-//		  group, then all events before it must also have been done (ignoring
-//		  redo, which is simply a mechanism to fill in the holes). So the
-//		  requirement over creation times is mainly a mechanism for making
-//		  lookup of "next" events efficient. Other mechanisms may exist, but I
-//		  haven't thought of any.
-//
-//		  With expire time what I ultimately need is to be able to do is say "If
-//		  an event's expire is before the current time, it's not available for
-//		  any operation". This also isn't a user-based requirement, I suppose.
-//		  It allows me to do things like say "if this event has expired, then
-//		  all events before must also have expired, and can be gc'd". So the
-//		  requirement over expire times is mainly a mechanism for determining if
-//		  an event should be considered valid. There's definitely other ways to
-//		  do this, like brute force checking all the time. But none are super
-//		  great for the actual cleanup step.
-//
-//		- (This might be solving the wrong problem) A sub solution here is to
-//		  keep a set of events per consumer groups ordered by expiration, and
-//		  the rest can be whatever. Whenever any events are pulled off of
-//		  available they go in that, Then when cleanup happens I can look at
-//		  only that one.
-//
-// * I come up with a new setup for doing all of this
-
-// While trying to solve the above problem, I realized something. I'm *probably*
-// only actually using inProgByID and done to get their "newest" event that has
-// been processed. They're effectively being used as pointers within the
-// "queue". I might be able to instead set them as keys instead of sorted sets.
-// which would be cleaner and save some space. I think I still need inProbByAck
-// to be a sorted set, since that needs to be ranged over, and redo definitely
-// needs to be a set.
+// TODO I'm *probably* only actually using inProgByID and done to get their
+// "newest" event that has been processed. They're effectively being used as
+// pointers within the "queue". I might be able to instead set them as keys
+// instead of sorted sets.  which would be cleaner and save some space. I think
+// I still need inProbByAck to be a sorted set, since that needs to be ranged
+// over, and redo definitely needs to be a set.
 
 // QGet retrieves an available event from the given queue for the given consumer
 // group.
@@ -202,7 +145,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 
 	now := time.Now()
 	timeoutCh := time.After(c.BlockUntil.Sub(now))
-	esAvail := queueAvailable(c.Queue)
+	esAvail := queueAvailableByID(c.Queue)
 
 	for {
 		stopCh := make(chan struct{})
@@ -224,11 +167,12 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 
 func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	now := time.Now()
-	esAvail := queueAvailable(c.Queue)
+	esAvailID := queueAvailableByID(c.Queue)
 	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
 	esInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
 	esRedo := queueRedo(c.Queue, c.ConsumerGroup)
 	esDone := queueDone(c.Queue, c.ConsumerGroup)
+	esInUse := queueInUseByExpire(c.Queue, c.ConsumerGroup)
 
 	// Depending on if Expire is set, we might add the event to the inProgs or
 	// done
@@ -246,12 +190,24 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 					Score:     core.NewTS(c.AckDeadline),
 				},
 			},
+			{
+				QueryAddTo: &core.QueryAddTo{
+					EventSets:     []core.EventSet{esInUse},
+					ExpireAsScore: true,
+				},
+			},
 		}
 	} else {
 		inProgOrDone = []core.QueryAction{
 			{
 				QueryAddTo: &core.QueryAddTo{
 					EventSets: []core.EventSet{esDone},
+				},
+			},
+			{
+				QueryAddTo: &core.QueryAddTo{
+					EventSets:     []core.EventSet{esInUse},
+					ExpireAsScore: true,
 				},
 			},
 		}
@@ -264,26 +220,14 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		},
 	}
 
-	mostRecentSelect := core.QueryEventRangeSelect{
-		QueryScoreRange: core.QueryScoreRange{
-			Min:     core.NewTS(now),
-			MinExcl: true,
-			Max:     0,
-		},
-		Limit:   1,
-		Reverse: true,
-	}
-	oldestSelect := mostRecentSelect
-	oldestSelect.Reverse = false
-
 	var qq []core.QueryAction
 	// First, if there's any Events in redo, we grab the first one from there
 	// and move it to inProg/done
 	qq = append(qq,
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet:              esRedo,
-				QueryEventRangeSelect: &oldestSelect,
+				EventSet:       esRedo,
+				PosRangeSelect: []int64{0, 0},
 			},
 		},
 		core.QueryAction{
@@ -297,20 +241,20 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq,
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet:              esInProgID,
-				QueryEventRangeSelect: &mostRecentSelect,
+				EventSet:       esInProgID,
+				PosRangeSelect: []int64{-1, -1},
 			},
 		},
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet:              esDone,
-				QueryEventRangeSelect: &mostRecentSelect,
-				Union: true,
+				EventSet:       esDone,
+				PosRangeSelect: []int64{-1, -1},
+				Union:          true,
 			},
 		},
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
-				EventSet: esAvail,
+				EventSet: esAvailID,
 				QueryEventRangeSelect: &core.QueryEventRangeSelect{
 					QueryScoreRange: core.QueryScoreRange{
 						MinFromInput: true,
@@ -335,7 +279,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	// thusfar
 	qq = append(qq, core.QueryAction{
 		QuerySelector: &core.QuerySelector{
-			EventSet:       esAvail,
+			EventSet:       esAvailID,
 			PosRangeSelect: []int64{0, 0},
 		},
 		QueryConditional: core.QueryConditional{
@@ -352,7 +296,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq, inProgOrDone...)
 
 	qa := core.QueryActions{
-		EventSetBase: esAvail.Base,
+		EventSetBase: esAvailID.Base,
 		QueryActions: qq,
 		Now:          now,
 	}
@@ -437,6 +381,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	esInProgAck := queueInProgressByAck(queue, consumerGroup)
 	esDone := queueDone(queue, consumerGroup)
 	esRedo := queueRedo(queue, consumerGroup)
+	esInUse := queueInUseByExpire(queue, consumerGroup)
 
 	qsr := core.QueryScoreRange{
 		Max: nowTS,
@@ -463,36 +408,33 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 				},
 			},
 
-			// Next find all events in inProgID that have outright expired,
-			// remove them from inProgAck (since that's the only way to find
-			// them there) and inProgID while we're there
+			// Next find all events in inUse that have outright expired,
+			// remove them from all of our sets
 			{
 				QuerySelector: &core.QuerySelector{
-					EventSet: esInProgID,
+					EventSet: esInUse,
 					QueryEventRangeSelect: &core.QueryEventRangeSelect{
 						QueryScoreRange: qsr,
 					},
 				},
 			},
 			{
-				RemoveFrom: []core.EventSet{esInProgAck, esInProgID},
-			},
-
-			// Finally remove all that have outright expired from done and redo
-			{
-				QueryRemoveByScore: &core.QueryRemoveByScore{
-					QueryScoreRange: qsr,
-					EventSets: []core.EventSet{
-						esDone,
-						esRedo,
-					},
+				RemoveFrom: []core.EventSet{
+					esInProgAck,
+					esInProgID,
+					esDone,
+					esRedo,
+					esInUse,
 				},
 			},
 		},
 		Now: now,
 	}
 
-	_, err := p.c.Query(qa)
+	ee, err := p.c.Query(qa)
+	for _, e := range ee {
+		log.Printf("e: %v", e.ID)
+	}
 	return err
 }
 
@@ -502,19 +444,23 @@ func (p Peel) CleanAvailable(queue string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
 
-	esAvail := queueAvailable(queue)
+	esAvailID := queueAvailableByID(queue)
+	esAvailEx := queueAvailableByExpire(queue)
 	qa := core.QueryActions{
-		EventSetBase: esAvail.Base,
+		EventSetBase: esAvailID.Base,
 		QueryActions: []core.QueryAction{
 			{
-				QueryRemoveByScore: &core.QueryRemoveByScore{
-					QueryScoreRange: core.QueryScoreRange{
-						Max: nowTS,
-					},
-					EventSets: []core.EventSet{
-						esAvail,
+				QuerySelector: &core.QuerySelector{
+					EventSet: esAvailEx,
+					QueryEventRangeSelect: &core.QueryEventRangeSelect{
+						QueryScoreRange: core.QueryScoreRange{
+							Max: nowTS,
+						},
 					},
 				},
+			},
+			{
+				RemoveFrom: []core.EventSet{esAvailID, esAvailEx},
 			},
 		},
 		Now: now,
@@ -558,13 +504,13 @@ type QueueStats struct {
 // QStatus returns information about the given queues relative to the given
 // consumer group. See the QueueStats docs for more on what exactly is returned.
 func (p Peel) QStatus(c QStatusCommand) (QueueStats, error) {
-	esAvail := queueAvailable(c.Queue)
+	esAvailID := queueAvailableByID(c.Queue)
 	esInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
 	esRedo := queueRedo(c.Queue, c.ConsumerGroup)
 	esDone := queueDone(c.Queue, c.ConsumerGroup)
 
 	var qs QueueStats
-	counts, err := p.c.EventSetCounts(esAvail, esInProgID, esRedo, esDone)
+	counts, err := p.c.EventSetCounts(esAvailID, esInProgID, esRedo, esDone)
 	if err != nil {
 		return qs, err
 	}

@@ -6,9 +6,15 @@ import "github.com/mediocregopher/bananaq/core"
 // change the separator in redis to be \0 or something
 
 // Keeps track of events which are available to be retrieved by any particular
-// consumer group
-func queueAvailable(queue string) core.EventSet {
-	return core.EventSet{Base: queue, Subs: []string{"available"}}
+// consumer group, with scores corresponding to the event's id.
+func queueAvailableByID(queue string) core.EventSet {
+	return core.EventSet{Base: queue, Subs: []string{"available", "id"}}
+}
+
+// Keeps track of events which are available to be retrieved by any particular
+// consumer group, with scores corresponding to the event's expire time.
+func queueAvailableByExpire(queue string) core.EventSet {
+	return core.EventSet{Base: queue, Subs: []string{"available", "expire"}}
 }
 
 // Keeps track of events that are currently in progress, with scores
@@ -35,4 +41,10 @@ func queueRedo(queue, cgroup string) core.EventSet {
 // event's id
 func queueDone(queue, cgroup string) core.EventSet {
 	return core.EventSet{Base: queue, Subs: []string{cgroup, "done"}}
+}
+
+// Keeps track of all events currently in use by a cgroup which haven't expired.
+// Used in order to clean expired events out of a group
+func queueInUseByExpire(queue, cgroup string) core.EventSet {
+	return core.EventSet{Base: queue, Subs: []string{cgroup, "inuse"}}
 }

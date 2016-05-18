@@ -65,7 +65,8 @@ func TestQAdd(t *T) {
 	})
 	require.Nil(t, err)
 	assert.NotZero(t, id)
-	assertEventSet(t, queueAvailable(queue), id)
+	assertEventSet(t, queueAvailableByID(queue), id)
+	assertEventSet(t, queueAvailableByExpire(queue), id)
 
 	e, err := testPeel.c.GetEvent(id)
 	require.Nil(t, err)
@@ -113,15 +114,16 @@ func newTestQueue(t *T, numEvents int) (string, []core.Event) {
 }
 
 func randEmptyEvent(t *T, expired bool) core.Event {
-	var id core.ID
+	id, err := testPeel.c.NewID(core.NewTS(time.Now()))
+	require.Nil(t, err)
+
+	var expire core.TS
 	if expired {
-		id = core.ID(core.NewTS(time.Now().Add(-10 * time.Second)))
+		expire = core.NewTS(time.Now().Add(-10 * time.Second))
 	} else {
-		var err error
-		id, err = testPeel.c.NewID(core.NewTS(time.Now().Add(10 * time.Second)))
-		require.Nil(t, err)
+		expire = core.NewTS(time.Now().Add(10 * time.Second))
 	}
-	return core.Event{ID: id}
+	return core.Event{ID: id, Expire: expire}
 }
 
 func TestQGet(t *T) {
@@ -136,6 +138,7 @@ func TestQGet(t *T) {
 	esInProgAck := queueInProgressByAck(queue, cgroup)
 	esRedo := queueRedo(queue, cgroup)
 	esDone := queueDone(queue, cgroup)
+	esInUse := queueInUseByExpire(queue, cgroup)
 
 	// Test that a "blank" queue gives us its first event
 	cmd := QGetCommand{
@@ -148,6 +151,7 @@ func TestQGet(t *T) {
 	assert.Equal(t, ee[0], e)
 	assertEventSet(t, esInProgID, ee[0].ID)
 	assertEventSet(t, esInProgAck, ee[0].ID)
+	assertEventSet(t, esInUse, ee[0].ID)
 
 	// Test that a queue with empty done but an inProg returns one after inProg
 	e, err = testPeel.QGet(cmd)
@@ -155,6 +159,7 @@ func TestQGet(t *T) {
 	assert.Equal(t, ee[1], e)
 	assertEventSet(t, esInProgID, ee[0].ID, ee[1].ID)
 	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID)
+	assertEventSet(t, esInUse, ee[0].ID, ee[1].ID)
 
 	// Test that empty expire goes straight to done
 	cmd.AckDeadline = time.Time{}
@@ -209,19 +214,19 @@ func TestQGet(t *T) {
 	// Now we're gonna do something mean, and insert an event with an expire
 	// which is before the most recent expire in done
 	contents := testutil.RandStr()
+	expire := core.NewTS(ee[5].Expire.Time().Add(-5 * time.Second))
 	id, err := testPeel.QAdd(QAddCommand{
-		Queue: queue,
-		// TODO don't base this on ID, base it on expire
-		Expire:   core.TS(ee[5].ID).Time().Add(-5 * time.Second),
+		Queue:    queue,
+		Expire:   expire.Time(),
 		Contents: contents,
 	})
 	require.Nil(t, err)
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
-	assert.Equal(t, core.Event{ID: id, Contents: contents}, e)
-	assertEventSet(t, esInProgID, ee[0].ID, ee[1].ID, id)
-	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID, id)
-	assertEventSet(t, esDone, ee[2].ID, ee[3].ID, ee[4].ID, ee[5].ID)
+	assert.Equal(t, core.Event{ID: id, Expire: expire, Contents: contents}, e)
+	assertEventSet(t, esInProgID, ee[0].ID, ee[1].ID)
+	assertEventSet(t, esInProgAck, ee[0].ID, ee[1].ID)
+	assertEventSet(t, esDone, ee[2].ID, ee[3].ID, ee[4].ID, id, ee[5].ID)
 	assertEventSet(t, esRedo) // assert empty
 }
 
@@ -271,13 +276,14 @@ func TestQGetBlocking(t *T) {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		contents := testutil.RandStr()
+		expire := core.NewTS(time.Now().Add(10 * time.Minute))
 		id, err := testPeel.QAdd(QAddCommand{
 			Queue:    queue,
-			Expire:   time.Now().Add(10 * time.Minute),
+			Expire:   expire.Time(),
 			Contents: contents,
 		})
 		require.Nil(t, err)
-		e2 = core.Event{ID: id, Contents: contents}
+		e2 = core.Event{ID: id, Expire: expire, Contents: contents}
 	}()
 	e = assertBlockFor(500 * time.Millisecond)
 	assert.Equal(t, e2, e)
@@ -333,61 +339,75 @@ func TestClean(t *T) {
 	esInProgAck := queueInProgressByAck(queue, cgroup)
 	esDone := queueDone(queue, cgroup)
 	esRedo := queueRedo(queue, cgroup)
+	esInUse := queueInUseByExpire(queue, cgroup)
 	now := time.Now()
 
 	// in progress, has neither expired nor missed its deadline
 	ee0 := randEmptyEvent(t, false)
 	requireAddToES(t, esInProgID, ee0, 0)
-	requireAddToES(t, esInProgAck, ee0, core.NewTS(now.Add(10*time.Millisecond)))
+	requireAddToES(t, esInProgAck, ee0, core.NewTS(now.Add(1*time.Second)))
+	requireAddToES(t, esInUse, ee0, ee0.Expire)
 
 	// in progress, missed its deadline
 	ee1 := randEmptyEvent(t, false)
 	requireAddToES(t, esInProgID, ee1, 0)
 	requireAddToES(t, esInProgAck, ee1, core.NewTS(now.Add(-10*time.Millisecond)))
+	requireAddToES(t, esInUse, ee1, ee1.Expire)
 
 	// in progress, expired
 	ee2 := randEmptyEvent(t, true)
 	requireAddToES(t, esInProgID, ee2, 0)
 	requireAddToES(t, esInProgAck, ee2, core.NewTS(now.Add(-10*time.Millisecond)))
+	requireAddToES(t, esInUse, ee2, ee2.Expire)
 
 	// in redo, not expired
 	ee3 := randEmptyEvent(t, false)
 	requireAddToES(t, esRedo, ee3, 0)
+	requireAddToES(t, esInUse, ee3, ee3.Expire)
 
 	// in redo, expired
 	ee4 := randEmptyEvent(t, true)
 	requireAddToES(t, esRedo, ee4, 0)
+	requireAddToES(t, esInUse, ee4, ee4.Expire)
 
 	// in done, not expired
 	ee5 := randEmptyEvent(t, false)
 	requireAddToES(t, esDone, ee5, 0)
+	requireAddToES(t, esInUse, ee5, ee5.Expire)
 
 	// in done, expired
 	ee6 := randEmptyEvent(t, true)
 	requireAddToES(t, esDone, ee6, 0)
+	requireAddToES(t, esInUse, ee6, ee6.Expire)
 
 	require.Nil(t, testPeel.Clean(queue, cgroup))
 	assertEventSet(t, esInProgID, ee0.ID)
 	assertEventSet(t, esInProgAck, ee0.ID)
 	assertEventSet(t, esDone, ee5.ID)
 	assertEventSet(t, esRedo, ee1.ID, ee3.ID)
+	assertEventSet(t, esInUse, ee0.ID, ee1.ID, ee3.ID, ee5.ID)
 }
 
 func TestCleanAvailable(t *T) {
 	queue := testutil.RandStr()
-	esAvail := queueAvailable(queue)
+	esAvailID := queueAvailableByID(queue)
+	esAvailEx := queueAvailableByExpire(queue)
 
 	ee0 := randEmptyEvent(t, false)
-	requireAddToES(t, esAvail, ee0, 0)
+	requireAddToES(t, esAvailID, ee0, 0)
+	requireAddToES(t, esAvailEx, ee0, ee0.Expire)
 	ee1 := randEmptyEvent(t, true)
-	requireAddToES(t, esAvail, ee1, 0)
+	requireAddToES(t, esAvailID, ee1, 0)
+	requireAddToES(t, esAvailEx, ee1, ee1.Expire)
 	ee2 := randEmptyEvent(t, false)
-	requireAddToES(t, esAvail, ee2, 0)
+	requireAddToES(t, esAvailID, ee2, 0)
+	requireAddToES(t, esAvailEx, ee2, ee2.Expire)
 	ee3 := randEmptyEvent(t, true)
-	requireAddToES(t, esAvail, ee3, 0)
+	requireAddToES(t, esAvailID, ee3, 0)
+	requireAddToES(t, esAvailEx, ee3, ee3.Expire)
 
 	require.Nil(t, testPeel.CleanAvailable(queue))
-	assertEventSet(t, esAvail, ee0.ID, ee2.ID)
+	assertEventSet(t, esAvailID, ee0.ID, ee2.ID)
 }
 
 func TestQStatus(t *T) {
