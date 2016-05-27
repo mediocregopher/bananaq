@@ -4,7 +4,6 @@
 package peel
 
 import (
-	"log"
 	"time"
 
 	"github.com/mediocregopher/bananaq/core"
@@ -103,15 +102,7 @@ type QGetCommand struct {
 	ConsumerGroup string // Required
 	AckDeadline   time.Time
 	BlockUntil    time.Time
-	ConsumerID    string
 }
-
-// TODO this API is kind of gross, the lenght of its docstring is evidence of
-// that. I'm doing a lot of work and adding a lot of API complexity to support
-// this Consumers field in the QStatus. I should consider how necessary that
-// really is, and if it's worth it. It's definitely a useful thing, but if I can
-// come up with another way to get that info that's similartly convenient,
-// that'd be ideal.
 
 // TODO I'm *probably* only actually using inProgByID and done to get their
 // "newest" event that has been processed. They're effectively being used as
@@ -127,15 +118,6 @@ type QGetCommand struct {
 // Event before it is placed back in the queue for this consumer group. If
 // AckDeadline is not set, then the Event will never be placed back, and QAck
 // isn't necessary.
-//
-// If no new event is currently available, but BlockUntil is given, this call
-// will block until an event becomes available, or until BlockUntil is reached,
-// whichever happens first. If BlockUntil is not given this call always returns
-// immediately, regardless of available events.
-//
-// If ConsumerID is given alongside BlockUntil, then it will be used as a unique
-// identifier to keep track of this consumer for the purposes of the Consumers
-// field in the QStatus return.
 //
 // An empty event is returned if there are no available events for the queue.
 func (p Peel) QGet(c QGetCommand) (core.Event, error) {
@@ -431,10 +413,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 		Now: now,
 	}
 
-	ee, err := p.c.Query(qa)
-	for _, e := range ee {
-		log.Printf("e: %v", e.ID)
-	}
+	_, err := p.c.Query(qa)
 	return err
 }
 

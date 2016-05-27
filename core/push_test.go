@@ -6,7 +6,6 @@ import (
 
 	"github.com/levenlabs/golib/testutil"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestKeyWait(t *T) {
@@ -84,31 +83,4 @@ func TestKeyWait(t *T) {
 
 	close(ch4stop)
 	assertNotBlocking(ch4)
-}
-
-func TestStoreWaiters(t *T) {
-	id1 := testutil.RandStr()
-	id2 := testutil.RandStr()
-	es := randKey(testutil.RandStr())
-
-	now := NewTS(time.Now())
-	assertCount := func(c int) {
-		cc, err := testCore.KeyCountWaiters(es, now)
-		require.Nil(t, err)
-		assert.Equal(t, c, cc)
-	}
-	assertCount(0)
-
-	now = NewTS(time.Now())
-	err := testCore.KeyStoreWaiter(es, id1, now, NewTS(time.Now().Add(1*time.Second)))
-	require.Nil(t, err)
-	err = testCore.KeyStoreWaiter(es, id2, now, NewTS(time.Now().Add(5*time.Second)))
-	require.Nil(t, err)
-	assertCount(2)
-
-	now = NewTS(time.Now().Add(2 * time.Second))
-	assertCount(1)
-
-	now = NewTS(time.Now().Add(10 * time.Second))
-	assertCount(0)
 }
