@@ -446,24 +446,36 @@ func (p Peel) CleanAvailable(queue string) error {
 	return err
 }
 
-// TODO CleanAll
+// CleanAll will call CleanAvailable on all known queues and Clean on all of
+// their known consumer groups. Will stop execution at the first error
+func (p Peel) CleanAll() error {
+	qcg, err := p.AllQueuesConsumerGroups()
+	if err != nil {
+		return err
+	}
+
+	for q, cgs := range qcg {
+		if err = p.CleanAvailable(q); err != nil {
+			return err
+		}
+		for cg := range cgs {
+			if err = p.Clean(q, cg); err != nil {
+				return err
+			}
+		}
+	}
+	return err
+}
 
 // QStatusCommand describes the parameters which can be passed into the QStatus
 // command
 type QStatusCommand struct {
-	// TODO should be queues
-	Queue         string // Required
-	ConsumerGroup string // Required
+	Queues         []string
+	ConsumerGroups []string
 }
 
-// QueueStats are available statistics about a queue (per consumer group) at any
-// given moment. Note that the only events which are considered for any queue
-// are those which haven't expired or been cleaned up
-type QueueStats struct {
-	// Number of events for the queue in the system. Will be the same regardless
-	// of consumer group
-	Total uint64
-
+// ConsumerGroupStats are available statistics about a queue/consumer group
+type ConsumerGroupStats struct {
 	// Number of events the consumer group has yet to process for the queue
 	Available uint64
 
@@ -477,24 +489,91 @@ type QueueStats struct {
 	Done uint64
 }
 
-// QStatus returns information about the given queues relative to the given
-// consumer group. See the QueueStats docs for more on what exactly is returned.
-func (p Peel) QStatus(c QStatusCommand) (QueueStats, error) {
-	keyAvailID := queueAvailableByID(c.Queue)
-	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
-	keyRedo := queueRedo(c.Queue, c.ConsumerGroup)
-	keyDone := queueDone(c.Queue, c.ConsumerGroup)
+// QueueStats are available statistics about a queue across all consumer groups
+type QueueStats struct {
+	// Number of events for the queue in the system. Will be the same regardless
+	// of consumer group
+	Total uint64
 
-	var qs QueueStats
-	counts, err := p.c.SetCounts(keyAvailID, keyInProgID, keyRedo, keyDone)
+	// Statistics for each consumer group known for the queue. The key will be
+	// the consumer group's name
+	ConsumerGroupStats map[string]ConsumerGroupStats
+}
+
+// QStatus returns information about the all queues relative to their consumer
+// groups. See the QueueStats docs for more on what exactly is returned.  The
+// Queues and ConsumerGroups parameters can be set to filter the returned data
+// to only the given queues/consumer groups. If either is not set no filtering
+// will be done on that level.
+func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
+	// TODO this could be implemented in a much cleaner way
+	qcg, err := p.AllQueuesConsumerGroups()
 	if err != nil {
-		return qs, err
+		return nil, err
 	}
 
-	qs.Total = counts[0]
-	qs.InProgress = counts[1]
-	qs.Redo = counts[2]
-	qs.Done = counts[3]
-	qs.Available = qs.Total - qs.InProgress - qs.Redo - qs.Done
-	return qs, nil
+	filtered := func(s string, l []string) bool {
+		if l == nil {
+			return false
+		}
+		for _, ls := range l {
+			if ls == s {
+				return false
+			}
+		}
+		return true
+	}
+
+	keys := make([]core.Key, 0, len(qcg))
+	keysNames := make([][]string, 0, len(qcg))
+	for q, cgs := range qcg {
+		if filtered(q, c.Queues) {
+			delete(qcg, q)
+			continue
+		}
+		keys = append(keys, queueAvailableByID(q))
+		keyName := make([]string, 1, len(cgs)+1)
+		keyName[0] = q
+		for cg := range cgs {
+			if filtered(cg, c.ConsumerGroups) {
+				delete(cgs, cg)
+				continue
+			}
+			keys = append(keys, queueInProgressByID(q, cg))
+			keys = append(keys, queueRedo(q, cg))
+			keys = append(keys, queueDone(q, cg))
+			keyName = append(keyName, cg)
+		}
+		keysNames = append(keysNames, keyName)
+	}
+
+	counts, err := p.c.SetCounts(keys...)
+	if err != nil {
+		return nil, err
+	}
+
+	m := map[string]QueueStats{}
+	for _, keyName := range keysNames {
+		q := keyName[0]
+		keyName = keyName[1:]
+
+		qs := QueueStats{
+			Total:              counts[0],
+			ConsumerGroupStats: map[string]ConsumerGroupStats{},
+		}
+		counts = counts[1:]
+
+		for _, cg := range keyName {
+			cgs := ConsumerGroupStats{
+				InProgress: counts[0],
+				Redo:       counts[1],
+				Done:       counts[2],
+			}
+			cgs.Available = qs.Total - cgs.InProgress - cgs.Redo - cgs.Done
+			counts = counts[3:]
+			qs.ConsumerGroupStats[cg] = cgs
+		}
+		m[q] = qs
+	}
+	return m, nil
 }

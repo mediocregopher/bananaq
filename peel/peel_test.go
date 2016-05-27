@@ -425,17 +425,23 @@ func TestQStatus(t *T) {
 	requireAddToKey(t, keyRedo, ee[3], 0)
 
 	qs, err := testPeel.QStatus(QStatusCommand{
-		Queue:         queue,
-		ConsumerGroup: cgroup,
+		Queues:         []string{queue},
+		ConsumerGroups: []string{cgroup},
 	})
 	require.Nil(t, err)
 
-	expected := QueueStats{
-		Total:      6,
-		InProgress: 1,
-		Done:       2,
-		Redo:       1,
-		Available:  2,
+	expected := map[string]QueueStats{
+		queue: QueueStats{
+			Total: 6,
+			ConsumerGroupStats: map[string]ConsumerGroupStats{
+				cgroup: ConsumerGroupStats{
+					InProgress: 1,
+					Done:       2,
+					Redo:       1,
+					Available:  2,
+				},
+			},
+		},
 	}
 
 	assert.Equal(t, expected, qs)
