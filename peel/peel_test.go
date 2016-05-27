@@ -270,12 +270,12 @@ func TestQGetBlocking(t *T) {
 	e := assertBlockFor(0)
 	assert.Equal(t, ee[0], e)
 
-	cmd.BlockUntil = time.Now().Add(1 * time.Second)
+	cmd.BlockUntil = time.Now().Add(1*time.Second + 10*time.Millisecond)
 	e = assertBlockFor(1 * time.Second)
 	assert.Equal(t, core.Event{}, e)
 
-	var e2 core.Event
 	cmd.BlockUntil = time.Now().Add(1 * time.Second)
+	e2ch := make(chan core.Event)
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		contents := testutil.RandStr()
@@ -286,9 +286,10 @@ func TestQGetBlocking(t *T) {
 			Contents: contents,
 		})
 		require.Nil(t, err)
-		e2 = core.Event{ID: id, Expire: expire, Contents: contents}
+		e2ch <- core.Event{ID: id, Expire: expire, Contents: contents}
 	}()
 	e = assertBlockFor(500 * time.Millisecond)
+	e2 := <-e2ch
 	assert.Equal(t, e2, e)
 }
 
