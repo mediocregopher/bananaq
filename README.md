@@ -249,17 +249,17 @@ Add an event to the given queue.
 `queue` is any arbitrary queue name.
 
 `expireSeconds` is the number of seconds from this moment after which the event
-will be removed from the queue. It may be an integer string, or a float string
-for less than second precision.
+will be removed from the queue.
 
 This will not return until the event has been successfully stored in redis. Set
 `NOBLOCK` if you want the server to return as soon as possible, even if the
 event can't be successfully added.
 
-Returns the event's id (a string) on success.
+Returns the event's id (a string) on success. If `NOBLOCK` is sent, the string
+`OK` will be returned.
 
 Returns an error if `NOBLOCK` is set and the bananaq instance is too overloaded
-to handle the event in the background. Increasing `bg-push-pool-size` will
+to handle the event in the background. Increasing `bg-qadd-pool-size` will
 increase the number of available routines which can handle unblocked push
 commands.
 
@@ -281,8 +281,8 @@ available to other consumers in the group again. It may be an integer string, or
 a float string for less than second precision. If not set, defaults to 30
 seconds. If set to `0` the event will automatically be acknowledged.
 
-Returns an array-reply with the eventID and contents of an event in the queue,
-or nil if the queue is empty.
+Returns an array-reply with the ID and contents of an event in the queue, or nil
+if the queue is empty.
 
 ```
 > QGET foo cool-kids
@@ -307,39 +307,14 @@ consumers in that consumer group can get it again.
 Returns an integer `1` if the event was acknowledged successfully, or `0` if not
 (implying the event timed out or it was acknowledged by another consumer).
 
-### QREGISTER
-
-> QREGISTER consumerGroup [queue ...]
-
-Register a client as a consumer for `consumerGroup` of zero or more queues. Used
-in conjunction with [QNOTIFY](#qnotify).
-
-Subsequent QREGISTER calls on the same client connection overwrites the
-`consumerGroup` and queue list from previous calls. Calling QREGISTER with no
-queues de-registers the client from all queues. The client disconnecting also
-deregisters it from all queues.
-
-Once registered a client is considered a consumer and can call
-[QNOTIFY](#qnotify) to block until an event is available on one of its
-registered queues. The client being a consumer for these queues will also be
-reflected in calls to [QSTATUS](#qstatus) and [QINFO](#qinfo).
-
-Returns `OK`
-
 ### QNOTIFY
 
-> QNOTIFY timeout
+> QNOTIFY consumerGroup timeout [queue ...]
 
-Block for `timeout` seconds until an event is available on any
-[registered](#qregister) queue.
-
-Returns a queue's name, or `nil` if no new events became available within the
-timeout.
-
-*NOTE This feature is supported using an internal redis pubsub channel.
-Consequently, if an event is pushed to a queue on one instance of bananaq, another
-instance of bananaq pointed at the same redis instance/cluster as the first will
-still send the queue name to all relevant clients calling QNOTIFY.*
+Looks for an available event for the given `consumerGroup` on any of the given
+queues, returning the name of the queue. If no events are available on any of
+the queues, blocks until one is available, or until `timeout` seconds have
+elapsed, at which point `nil` is returned.
 
 ### QFLUSH
 
@@ -435,8 +410,8 @@ The statistic maps each contain these keys/values:
 * available - The number of events which are available for being consumed by a
   consumer in this consumer group.
 
-* consumers - The number of consumers currently registered for the queue in this
-  consumer group.
+* consumers - The number of consumers currently [notified](#qnotify) on the
+  queue in this consumer group.
 
 *NOTE that there may in the future be more information returned in the
 statistics maps returned by this call; do not assume that they will always be of

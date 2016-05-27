@@ -6,21 +6,63 @@ import (
 	"net"
 	"time"
 
+	"github.com/levenlabs/go-llog"
+	"github.com/mc0/okq/config"
 	"github.com/mediocregopher/bananaq/clients"
 	"github.com/mediocregopher/bananaq/clients/consumers"
 	"github.com/mediocregopher/bananaq/commands"
-	"github.com/mediocregopher/bananaq/config"
 	"github.com/mediocregopher/bananaq/log"
 	_ "github.com/mediocregopher/bananaq/restore"
+	"github.com/mediocregopher/lever"
 	"github.com/mediocregopher/radix.v2/redis"
 )
 
+var pkgKV = llog.KV{
+	"pkg": "main",
+}
+
+// TODO go through and make sure "okq" is completely gone
+
 func main() {
+	l := lever.New("bananaq", nil)
+	l.Add(lever.Param{
+		Name:        "--listen-addr",
+		Description: "Address to listen for client connections on",
+		Default:     ":4777",
+	})
+	l.Add(lever.Param{
+		Name:        "--redis-addr",
+		Description: "Address redis is listening on. May be a solo redis instance or a node in a cluster",
+		Default:     "127.0.0.1:6379",
+	})
+	l.Add(lever.Param{
+		Name:        "--log-level",
+		Description: "Log level to run with. Can be debug, info, warn, error, fatal",
+		Default:     "info",
+	})
+	l.Add(lever.Param{
+		Name:        "--bg-qadd-pool-size",
+		Description: "Number of goroutines to have processing NOBLOCK QADD commands",
+		Default:     "128",
+	})
+	l.Parse()
+
+	listenAddr, _ := l.ParamStr("--listen-addr")
+	redisAddr, _ := l.ParamStr("--redis-addr")
+	logLevel, _ := l.ParamStr("--log-level")
+	bgQaddPoolSize, _ := l.ParamInt("--bg-qadd-pool-size")
+
+	llog.SetLevelFromString(logLevel)
+
+	// TODO do this locally wherever rand is actually needed
 	rand.Seed(time.Now().UnixNano())
 
+	kv := llog.KV{"listenAddr": listenAddr}
+
+	llog.Info("starting listen", pkgKV, kv)
 	server, err := net.Listen("tcp", config.ListenAddr)
-	if server == nil {
-		log.L.Fatal(err)
+	if err != nil {
+		llog.Fatal("error listening", pkgKV, kv, llog.KV{"err": err})
 	}
 
 	log.L.Printf("listening on %s", config.ListenAddr)
