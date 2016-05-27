@@ -63,12 +63,16 @@ var (
 type Core struct {
 	util.Cmder `msg:"-"`
 	w          *wublub.Wublub
+	o          *Opts
 }
 
 // Opts are optional fields which may be passed into New to affect behavior
 type Opts struct {
 	// Default 10. Number of threads which may publish simultaneously.
 	NumPublishers int
+
+	// Default "bananaq". String to prefix all redis keys with
+	RedisPrefix string
 }
 
 // New initializes a Core struct using the given Cmder. The Cmder must either be
@@ -79,6 +83,9 @@ func New(cmder util.Cmder, o *Opts) (*Core, error) {
 	}
 	if o.NumPublishers == 0 {
 		o.NumPublishers = 10
+	}
+	if o.RedisPrefix == "" {
+		o.RedisPrefix = "bananaq"
 	}
 
 	var df pool.DialFunc
@@ -103,6 +110,7 @@ func New(cmder util.Cmder, o *Opts) (*Core, error) {
 	c := &Core{
 		Cmder: cmder,
 		w:     wublub.New(wublub.Opts{Pool: p}),
+		o:     o,
 	}
 
 	return c, nil
@@ -115,8 +123,6 @@ func New(cmder util.Cmder, o *Opts) (*Core, error) {
 func (c *Core) Run() error {
 	return c.w.Run()
 }
-
-var idKey = "id"
 
 // TS identifies a single point in time as an integer number of microseconds
 type TS uint64
@@ -181,6 +187,8 @@ func (c Core) NewID(t TS) (ID, error) {
 		return last_raw
 	`
 
+	idKey := c.o.RedisPrefix + ":id"
+
 	var ib []byte
 	var err error
 	withMarshaled(func(bb [][]byte) {
@@ -237,7 +245,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c.Cmder, lua, 1, k.String(), pex, eb).Err
+		err = util.LuaEval(c.Cmder, lua, 1, k.String(c.o.RedisPrefix), pex, eb).Err
 	}, &e)
 	return err
 }
@@ -246,7 +254,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 // expired or never existed
 func (c *Core) GetEvent(id ID) (Event, error) {
 	k := Key{Base: id.String(), Subs: []string{"event"}}
-	r := c.Cmd("GET", k.String())
+	r := c.Cmd("GET", k.String(c.o.RedisPrefix))
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}
@@ -278,12 +286,12 @@ type Key struct {
 }
 
 // String returns the string form of the Key, as it will appear in redis
-func (k Key) String() string {
+func (k Key) String(prefix string) string {
 	// If this changes remember to change it in Query as well
 	if len(k.Subs) > 0 {
-		return fmt.Sprintf("bananaq:{%s}:%s", k.Base, strings.Join(k.Subs, ":"))
+		return fmt.Sprintf("%s:k:{%s}:%s", prefix, k.Base, strings.Join(k.Subs, ":"))
 	}
-	return fmt.Sprintf("bananaq:{%s}", k.Base)
+	return fmt.Sprintf("%s:k:{%s}", prefix, k.Base)
 }
 
 // KeyFromString takes the string form of a Key and returns the associated
@@ -489,8 +497,8 @@ func (c *Core) Query(qas QueryActions) ([]Event, error) {
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
-		k := Key{Base: qas.KeyBase}
-		eeb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k.String(), nowb, qasb).Bytes()
+		k := Key{Base: qas.KeyBase}.String(c.o.RedisPrefix)
+		eeb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
 	}, NewTS(qas.Now), &qas)
 	if err != nil {
 		return nil, err
@@ -516,7 +524,7 @@ func (c *Core) SetCounts(kk ...Key) ([]uint64, error) {
 
 	keys := make([]string, len(kk))
 	for i := range kk {
-		keys[i] = kk[i].String()
+		keys[i] = kk[i].String(c.o.RedisPrefix)
 	}
 
 	lua := `
@@ -543,4 +551,19 @@ func (c *Core) SetCounts(kk ...Key) ([]uint64, error) {
 	}
 
 	return ret, nil
+}
+
+// KeyScan returns all the Keys matching the given Key pattern. At least one
+// field in the given Key should be a "*"
+func (c *Core) KeyScan(k Key) ([]Key, error) {
+	s := util.NewScanner(c.Cmder, util.ScanOpts{
+		Command: "SCAN",
+		Pattern: k.String(c.o.RedisPrefix),
+	})
+
+	var ret []Key
+	for s.HasNext() {
+		ret = append(ret, KeyFromString(s.Next()))
+	}
+	return ret, s.Err()
 }

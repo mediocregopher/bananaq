@@ -451,6 +451,7 @@ func (p Peel) CleanAvailable(queue string) error {
 // QStatusCommand describes the parameters which can be passed into the QStatus
 // command
 type QStatusCommand struct {
+	// TODO should be queues
 	Queue         string // Required
 	ConsumerGroup string // Required
 }

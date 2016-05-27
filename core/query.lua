@@ -1,11 +1,12 @@
 local nowTS = cmsgpack.unpack(ARGV[1])
+local prefix = ARGV[3]
 
 local function debug(wat)
     redis.call("SET", "debug", cjson.encode(wat))
 end
 
 local function keyString(k)
-    local str = "bananaq:{"
+    local str = prefix .. ":k:{"
     str = str .. k.Base .. "}"
     for i = 1,#k.Subs do
         str = str .. ":" .. k.Subs[i]

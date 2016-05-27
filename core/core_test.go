@@ -18,15 +18,11 @@ func init() {
 		panic(err)
 	}
 
-	if testCore, err = New(p, nil); err != nil {
+	o := &Opts{RedisPrefix: testutil.RandStr()}
+	if testCore, err = New(p, o); err != nil {
 		panic(err)
 	}
 	go func() { panic(testCore.Run()) }()
-
-	// We set idKey to be random because this package's tests assume they are
-	// the only thing calling NewID. But if tests for other sub-packages in
-	// bananaq are also running they will be calling it too.
-	idKey = idKey + ":" + testutil.RandStr()
 }
 
 func TestNewID(t *T) {
@@ -130,7 +126,7 @@ func assertKey(t *T, k Key, ee ...Event) {
 
 // Assert the contents of an eventset as well as their scores
 func assertKeyRaw(t *T, k Key, exm map[Event]int64) {
-	arr, err := testCore.Cmd("ZRANGE", k.String(), 0, -1, "WITHSCORES").Array()
+	arr, err := testCore.Cmd("ZRANGE", k.String(testCore.o.RedisPrefix), 0, -1, "WITHSCORES").Array()
 	require.Nil(t, err)
 
 	m := map[Event]int64{}
@@ -174,7 +170,7 @@ func TestKeyString(t *T) {
 	}
 
 	for _, k := range kk {
-		str := k.String()
+		str := k.String(testCore.o.RedisPrefix)
 		assert.Equal(t, k, KeyFromString(str), "key:%q", str)
 	}
 }
@@ -812,4 +808,26 @@ func TestSetCounts(t *T) {
 	counts, err := testCore.SetCounts(randKey(base), k1, randKey(base), k2)
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{0, 5, 0, 1}, counts)
+}
+
+func TestKeyScan(t *T) {
+	base1 := testutil.RandStr()
+	base2 := testutil.RandStr()
+	k11, _ := randPopulatedKey(t, base1, 1)
+	k12, _ := randPopulatedKey(t, base1, 1)
+	k21, _ := randPopulatedKey(t, base2, 1)
+	k22, _ := randPopulatedKey(t, base2, 1)
+
+	assertScan := func(pattern Key, kk ...Key) {
+		found, err := testCore.KeyScan(pattern)
+		require.Nil(t, err)
+		for _, k := range found {
+			assert.Contains(t, kk, k, "k.String():%q", k.String(testCore.o.RedisPrefix))
+		}
+	}
+
+	assertScan(k11, k11)
+	assertScan(Key{Base: base1, Subs: []string{"*"}}, k11, k12)
+	assertScan(Key{Base: base2, Subs: []string{"*"}}, k21, k22)
+	assertScan(Key{Base: "*"}, k11, k12, k21, k22)
 }

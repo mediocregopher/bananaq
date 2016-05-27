@@ -11,19 +11,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testPeel Peel
-
-func init() {
+func newTestPeel() Peel {
 	p, err := pool.New("tcp", "127.0.0.1:6379", 1)
 	if err != nil {
 		panic(err)
 	}
 
-	if testPeel, err = New(p, nil); err != nil {
+	o := &core.Opts{
+		RedisPrefix: testutil.RandStr(),
+	}
+	peel, err := New(p, o)
+	if err != nil {
 		panic(err)
 	}
-	go func() { panic(testPeel.Run()) }()
+	go func() { panic(peel.Run()) }()
+	return peel
 }
+
+var testPeel = newTestPeel()
 
 func keyElems(t *T, k core.Key) []core.Event {
 	qa := core.QueryActions{
