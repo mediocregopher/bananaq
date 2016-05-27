@@ -1,6 +1,9 @@
-// Package peel contains the actual application specific logic for each
-// command which can be performed. It's designed to be able to be used as an
-// actual client for bananaq if desired.
+// Package peel is a client for bananaq which connects directly to the backing
+// redis instance(s) instead of using the normal server. This can be used by any
+// number of clients along-side any number of server instances. None of them
+// need to coordinate with each other.
+//
+// TODO flesh this out
 package peel
 
 import (
@@ -305,6 +308,7 @@ type QAckCommand struct {
 // acknowledged. false will be returned if the deadline was missed, and
 // therefore some other consumer may re-process the Event later.
 func (p Peel) QAck(c QAckCommand) (bool, error) {
+	// TODO only require an ID?
 	now := time.Now()
 
 	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
@@ -577,3 +581,5 @@ func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
 	}
 	return m, nil
 }
+
+// TODO QINFO
