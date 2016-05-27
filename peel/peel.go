@@ -7,38 +7,36 @@ import (
 	"time"
 
 	"github.com/mediocregopher/bananaq/core"
+	"github.com/mediocregopher/radix.v2/util"
 )
 
 // Peel contains all the information needed to actually implement the
 // application logic of bananaq. it is intended to be used both as the server
 // component and as a client for external applications which want to be able to
-// interact with the database directly. It can be initialized manually, or using
-// the New method. All methods on Peel are thread-safe.
+// interact with the database directly. All methods on Peel are thread-safe.
 type Peel struct {
 	c *core.Core
 }
 
-// New initializes a Peel struct with a Core, using the given redis address and
-// pool size. The redis address can be a standalone node or a node in a cluster.
-func New(redisAddr string, poolSize int) (Peel, error) {
-	c, err := core.New(redisAddr, poolSize)
+// New initializes a Peel struct with a Core, using the given redis Cmder as a
+// backer. The Cmder can be either a radix.v2 *pool.Pool or *cluster.Cluster.
+// core.Opts may be nil to use default values.
+func New(cmder util.Cmder, o *core.Opts) (Peel, error) {
+	c, err := core.New(cmder, o)
 	return Peel{c}, err
 }
 
-// TODO Peel Run command
-
-// Client describes the information attached to any given client of bananaq.
-// For most commands this isn't actually necessary, but for some it's actually
-// used (these will be documented as such)
-// TODO this probably isn't actually necessary
-type Client struct {
-	ID string
+// Run performs all the background work needed to support Peel. It will block
+// until an error is reached, and then return that. At that point the caller
+// should handle the error (i.e. probably log it), and then decide whether to
+// stop execution or call Run again.
+func (p Peel) Run() error {
+	return p.c.Run()
 }
 
 // QAddCommand describes the parameters which can be passed into the QAdd
 // command
 type QAddCommand struct {
-	Client
 	Queue    string    // Required
 	Expire   time.Time // Required
 	Contents string    // Required
@@ -296,7 +294,6 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 // QAckCommand describes the parameters which can be passed into the QAck
 // command
 type QAckCommand struct {
-	Client
 	Queue         string     // Required
 	ConsumerGroup string     // Required
 	Event         core.Event // Required, Contents field optional
@@ -454,7 +451,6 @@ func (p Peel) CleanAvailable(queue string) error {
 // QStatusCommand describes the parameters which can be passed into the QStatus
 // command
 type QStatusCommand struct {
-	Client
 	Queue         string // Required
 	ConsumerGroup string // Required
 }

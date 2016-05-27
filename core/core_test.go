@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/levenlabs/golib/testutil"
+	"github.com/mediocregopher/radix.v2/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -12,8 +13,12 @@ import (
 var testCore *Core
 
 func init() {
-	var err error
-	if testCore, err = New("127.0.0.1:6379", 1); err != nil {
+	p, err := pool.New("tcp", "127.0.0.1:6379", 1)
+	if err != nil {
+		panic(err)
+	}
+
+	if testCore, err = New(p, nil); err != nil {
 		panic(err)
 	}
 	go func() { panic(testCore.Run()) }()

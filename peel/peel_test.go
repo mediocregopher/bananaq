@@ -6,6 +6,7 @@ import (
 
 	"github.com/levenlabs/golib/testutil"
 	"github.com/mediocregopher/bananaq/core"
+	"github.com/mediocregopher/radix.v2/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,16 +14,15 @@ import (
 var testPeel Peel
 
 func init() {
-	var err error
-	if testPeel, err = New("127.0.0.1:6379", 1); err != nil {
+	p, err := pool.New("tcp", "127.0.0.1:6379", 1)
+	if err != nil {
 		panic(err)
 	}
-	// TODO when peel has a Run method, use that here
-	go func() { panic(testPeel.c.Run()) }()
-}
 
-func randClient() Client {
-	return Client{ID: testutil.RandStr()}
+	if testPeel, err = New(p, nil); err != nil {
+		panic(err)
+	}
+	go func() { panic(testPeel.Run()) }()
 }
 
 func keyElems(t *T, k core.Key) []core.Event {
@@ -58,7 +58,6 @@ func TestQAdd(t *T) {
 	queue := testutil.RandStr()
 	contents := testutil.RandStr()
 	id, err := testPeel.QAdd(QAddCommand{
-		Client:   randClient(),
 		Queue:    queue,
 		Expire:   time.Now().Add(10 * time.Second),
 		Contents: contents,
@@ -100,7 +99,6 @@ func newTestQueue(t *T, numEvents int) (string, []core.Event) {
 	var ee []core.Event
 	for i := 0; i < numEvents; i++ {
 		id, err := testPeel.QAdd(QAddCommand{
-			Client:   randClient(),
 			Queue:    queue,
 			Expire:   time.Now().Add(10 * time.Minute),
 			Contents: testutil.RandStr(),
@@ -301,7 +299,6 @@ func TestQAck(t *T) {
 	requireAddToKey(t, keyInProgAck, ee[0], core.NewTS(now.Add(10*time.Millisecond)))
 
 	cmd := QAckCommand{
-		Client:        randClient(),
 		Queue:         queue,
 		ConsumerGroup: cgroup,
 		Event:         ee[0],

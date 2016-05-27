@@ -11,12 +11,13 @@ package core
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/levenlabs/golib/radixutil"
+	"github.com/mediocregopher/radix.v2/cluster"
 	"github.com/mediocregopher/radix.v2/pool"
 	"github.com/mediocregopher/radix.v2/redis"
 	"github.com/mediocregopher/radix.v2/util"
@@ -64,20 +65,37 @@ type Core struct {
 	w          *wublub.Wublub
 }
 
-// New initializes a Core struct using the given redis address and pool size.
-// The redis address can be a standalone node or a node in a cluster.
-func New(redisAddr string, poolSize int) (*Core, error) {
-	cmder, err := radixutil.DialMaybeCluster("tcp", redisAddr, poolSize)
-	if err != nil {
-		return nil, err
+// Opts are optional fields which may be passed into New to affect behavior
+type Opts struct {
+	// Default 10. Number of threads which may publish simultaneously.
+	NumPublishers int
+}
+
+// New initializes a Core struct using the given Cmder. The Cmder must either be
+// a pool or a cluster instance, it cannot be anything else. Opts may be nil.
+func New(cmder util.Cmder, o *Opts) (*Core, error) {
+	if o == nil {
+		o = &Opts{}
+	}
+	if o.NumPublishers == 0 {
+		o.NumPublishers = 10
 	}
 
-	// It's unfortunate that we have to make yet another pool, but we don't know
-	// that cmder is a pool, and this is more straightforward than inspecting
-	// it.
-	// TODO figure out if it's possible for the user to pass their own pool into
-	// here, or at least pass a DialFunc?
-	p, err := pool.New("tcp", redisAddr, poolSize)
+	var df pool.DialFunc
+	if c, ok := cmder.(*cluster.Cluster); ok {
+		rand := rand.New(rand.NewSource(time.Now().UnixNano()))
+		df = func(_, _ string) (*redis.Client, error) {
+			istr := strconv.Itoa(rand.Int())
+			return c.GetForKey(istr)
+		}
+	} else {
+		cp := cmder.(*pool.Pool)
+		df = func(_, _ string) (*redis.Client, error) {
+			return cp.Get()
+		}
+	}
+
+	p, err := pool.NewCustom("", "", o.NumPublishers, df)
 	if err != nil {
 		return nil, err
 	}
