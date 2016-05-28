@@ -222,6 +222,39 @@ local function query_action(input, qa)
         return input, false
     end
 
+    if qa.QuerySingleSet then
+        local qss = qa.QuerySingleSet
+        local key = keyString(qss.Key)
+        if #input > 0 then
+            if qss.IfNewer then
+                local olde = redis.call("GET", key)
+                if olde then
+                    olde = expandEvent(olde)
+                    if olde.ID > input[1].ID then
+                        return input, false
+                    end
+                end
+            end
+
+            local exp = math.floor(input[1].Expire / 1000) -- to milliseconds
+            exp = exp + 1 -- add one for funsies
+            redis.call("SET", key, input[1].packed)
+            redis.call("PEXPIREAT", key, exp)
+        else
+            redis.call("DEL", key)
+        end
+        return input, false
+    end
+
+    if qa.SingleGet then
+        local key = keyString(qa.SingleGet)
+        local e = redis.call("GET", key)
+        if not e then return {}, false end
+        e = expandEvent(e)
+        if e.Expire < nowTS then return {}, false end
+        return {e}, false
+    end
+
     if qa.QueryFilter then return query_filter(input, qa.QueryFilter), false end
 
     -- Shouldn't really get here but whatever

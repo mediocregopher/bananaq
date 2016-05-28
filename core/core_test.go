@@ -852,3 +852,110 @@ func TestKeyScan(t *T) {
 	assertScan(Key{Base: base2, Subs: []string{"*"}}, k21, k22)
 	assertScan(Key{Base: "*"}, k11, k12, k21, k22)
 }
+
+func TestSingleGetSet(t *T) {
+	key := randKey(testutil.RandStr())
+	e := requireNewEmptyEvent(t)
+
+	// Setting returns the event
+	ee, err := testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Events: []Event{e},
+				},
+			},
+			{
+				QuerySingleSet: &QuerySingleSet{
+					Key: key,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, e, ee[0])
+
+	// Getting a set event returns it
+	ee, err = testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				SingleGet: &key,
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, e, ee[0])
+
+	// Getting a set event after the expire doesn't return it
+	ee, err = testCore.Query(QueryActions{
+		Now:     (TS(e.Expire) + 1).Time(),
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				SingleGet: &key,
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, ee)
+
+	// Trying to put an older event with IfNewer results in no change
+	e2 := e
+	e2.ID -= 5
+	ee, err = testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Events: []Event{e2},
+				},
+			},
+			{
+				QuerySingleSet: &QuerySingleSet{
+					Key:     key,
+					IfNewer: true,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, e2, ee[0])
+
+	ee, err = testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				SingleGet: &key,
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Equal(t, e, ee[0])
+
+	// Unsetting then getting event returns no event
+	ee, err = testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				QuerySingleSet: &QuerySingleSet{
+					Key: key,
+				},
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, ee)
+
+	ee, err = testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				SingleGet: &key,
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, ee)
+}

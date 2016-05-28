@@ -451,6 +451,18 @@ type QueryRemoveByScore struct {
 	QueryScoreRange
 }
 
+// QuerySingleSet will set the given Key to the first Event in the input. If the
+// input to this action has no events then the Key is unset. If it has more than
+// one Event an error is returned. The output from this action will be the
+// input. The expire on the Event will be used to expire the key
+//
+// If IfNewer is set, the key will only be set if its ID is newer than the ID of
+// the event already in the Key. This does not change the output in any way
+type QuerySingleSet struct {
+	Key
+	IfNewer bool
+}
+
 // QueryAction describes a single action to take on a set of events. Every
 // action has an input and an output, which are both always sorted
 // chronologically (by ID). Only one single field, apart from QueryConditional,
@@ -470,6 +482,14 @@ type QueryAction struct {
 
 	// Removes the input Events from the given Keys
 	RemoveFrom []Key
+
+	// Adds an Event to a key. See its doc string for more info
+	*QuerySingleSet
+
+	// Retrieve an Event that was set at the given Key using SingleSet. The
+	// output will be a set continaing only this Event, or empty output if the
+	// key isn't set
+	SingleGet *Key
 
 	// Filters Events out of the input. See its doc string for more info
 	*QueryFilter
