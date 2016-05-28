@@ -1,30 +1,30 @@
 package peel
 
-import (
-	"encoding/hex"
+import "github.com/mediocregopher/bananaq/core"
 
-	"github.com/mediocregopher/bananaq/core"
-)
+// TODO hex encoding everything super sucks, and makes things hard to debug
 
 func queueKeyMarshal(k core.Key) core.Key {
-	km := core.Key{
-		Base: hex.EncodeToString([]byte(k.Base)),
-		Subs: make([]string, len(k.Subs)),
-	}
-	for i, sub := range k.Subs {
-		km.Subs[i] = hex.EncodeToString([]byte(sub))
-	}
-	return km
+	return k
+	//km := core.Key{
+	//	Base: hex.EncodeToString([]byte(k.Base)),
+	//	Subs: make([]string, len(k.Subs)),
+	//}
+	//for i, sub := range k.Subs {
+	//	km.Subs[i] = hex.EncodeToString([]byte(sub))
+	//}
+	//return km
 }
 
 func queueKeyUnmarshal(k core.Key) core.Key {
-	b, _ := hex.DecodeString(k.Base)
-	subs := make([]string, len(k.Subs))
-	for i, sub := range k.Subs {
-		subum, _ := hex.DecodeString(sub)
-		subs[i] = string(subum)
-	}
-	return core.Key{Base: string(b), Subs: subs}
+	return k
+	//b, _ := hex.DecodeString(k.Base)
+	//subs := make([]string, len(k.Subs))
+	//for i, sub := range k.Subs {
+	//	subum, _ := hex.DecodeString(sub)
+	//	subs[i] = string(subum)
+	//}
+	//return core.Key{Base: string(b), Subs: subs}
 }
 
 // Keeps track of events which are available to be retrieved by any particular
@@ -40,13 +40,6 @@ func queueAvailableByExpire(queue string) core.Key {
 }
 
 // Keeps track of events that are currently in progress, with scores
-// corresponding to the event's id. Used to retrieve the next available event in
-// a queue
-func queueInProgressByID(queue, cgroup string) core.Key {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "inprogress", "id"}})
-}
-
-// Keeps track of events that are currently in progress, with scores
 // corresponding to the event's ack deadline. Used to timeout in progress events
 // and put them in redo
 func queueInProgressByAck(queue, cgroup string) core.Key {
@@ -59,9 +52,9 @@ func queueRedo(queue, cgroup string) core.Key {
 	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "redo"}})
 }
 
-// Keeps track of events which have been successfully processed. Score is the
-// event's id
-func queueDone(queue, cgroup string) core.Key {
+// Single key, used to keep track of newest event retrieved from avail by the
+// cgroup
+func queuePointer(queue, cgroup string) core.Key {
 	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "done"}})
 }
 

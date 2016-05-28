@@ -151,13 +151,6 @@ type QGetCommand struct {
 	BlockUntil    time.Time
 }
 
-// TODO I'm *probably* only actually using inProgByID and done to get their
-// "newest" event that has been processed. They're effectively being used as
-// pointers within the "queue". I might be able to instead set them as keys
-// instead of sorted sets.  which would be cleaner and save some space. I think
-// I still need inProbByAck to be a sorted set, since that needs to be ranged
-// over, and redo definitely needs to be a set.
-
 // QGet retrieves an available event from the given queue for the given consumer
 // group.
 //
@@ -197,10 +190,9 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	now := time.Now()
 	keyAvailID := queueAvailableByID(c.Queue)
-	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
 	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
 	keyRedo := queueRedo(c.Queue, c.ConsumerGroup)
-	keyDone := queueDone(c.Queue, c.ConsumerGroup)
+	keyPtr := queuePointer(c.Queue, c.ConsumerGroup)
 	keyInUse := queueInUseByExpire(c.Queue, c.ConsumerGroup)
 
 	// Depending on if Expire is set, we might add the event to the inProgs or
@@ -209,8 +201,9 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	if !c.AckDeadline.IsZero() {
 		inProgOrDone = []core.QueryAction{
 			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys: []core.Key{keyInProgID},
+				QuerySingleSet: &core.QuerySingleSet{
+					Key:     keyPtr,
+					IfNewer: true,
 				},
 			},
 			{
@@ -229,8 +222,9 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	} else {
 		inProgOrDone = []core.QueryAction{
 			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys: []core.Key{keyDone},
+				QuerySingleSet: &core.QuerySingleSet{
+					Key:     keyPtr,
+					IfNewer: true,
 				},
 			},
 			{
@@ -269,17 +263,8 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	// Otherwise, we grab the most recent Events from both inProgByID and done
 	qq = append(qq,
 		core.QueryAction{
-			QuerySelector: &core.QuerySelector{
-				Key:            keyInProgID,
-				PosRangeSelect: []int64{-1, -1},
-			},
-		},
-		core.QueryAction{
-			QuerySelector: &core.QuerySelector{
-				Key:            keyDone,
-				PosRangeSelect: []int64{-1, -1},
-				Union:          true,
-			},
+			SingleGet: &keyPtr,
+			Union:     true,
 		},
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
@@ -314,10 +299,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		QueryConditional: core.QueryConditional{
 			And: []core.QueryConditional{
 				{
-					IfEmpty: &keyDone,
-				},
-				{
-					IfEmpty: &keyInProgID,
+					IfEmpty: &keyPtr,
 				},
 			},
 		},
@@ -357,12 +339,11 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 	// TODO only require an ID?
 	now := time.Now()
 
-	keyInProgID := queueInProgressByID(c.Queue, c.ConsumerGroup)
 	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
-	keyDone := queueDone(c.Queue, c.ConsumerGroup)
+	keyPtr := queuePointer(c.Queue, c.ConsumerGroup)
 
 	qa := core.QueryActions{
-		KeyBase: keyDone.Base,
+		KeyBase: keyPtr.Base,
 		QueryActions: []core.QueryAction{
 			{
 				QuerySelector: &core.QuerySelector{
@@ -380,11 +361,12 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 				},
 			},
 			{
-				RemoveFrom: []core.Key{keyInProgID, keyInProgAck},
+				RemoveFrom: []core.Key{keyInProgAck},
 			},
 			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys: []core.Key{keyDone},
+				QuerySingleSet: &core.QuerySingleSet{
+					Key:     keyPtr,
+					IfNewer: true,
 				},
 			},
 		},
@@ -408,9 +390,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
 
-	keyInProgID := queueInProgressByID(queue, consumerGroup)
 	keyInProgAck := queueInProgressByAck(queue, consumerGroup)
-	keyDone := queueDone(queue, consumerGroup)
 	keyRedo := queueRedo(queue, consumerGroup)
 	keyInUse := queueInUseByExpire(queue, consumerGroup)
 
@@ -418,7 +398,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 		Max: nowTS,
 	}
 	qa := core.QueryActions{
-		KeyBase: keyDone.Base,
+		KeyBase: keyInUse.Base,
 		QueryActions: []core.QueryAction{
 			// First find all events who missed their ack deadline, remove them
 			// from both inProgs and add them to redo
@@ -431,7 +411,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 				},
 			},
 			{
-				RemoveFrom: []core.Key{keyInProgAck, keyInProgID},
+				RemoveFrom: []core.Key{keyInProgAck},
 			},
 			{
 				QueryAddTo: &core.QueryAddTo{
@@ -452,8 +432,6 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 			{
 				RemoveFrom: []core.Key{
 					keyInProgAck,
-					keyInProgID,
-					keyDone,
 					keyRedo,
 					keyInUse,
 				},
@@ -538,9 +516,6 @@ type ConsumerGroupStats struct {
 
 	// Number of events awaiting being re-attempted by the consumer group
 	Redo uint64
-
-	// Number of events the consumer group has successfully processed
-	Done uint64
 }
 
 // QueueStats are available statistics about a queue across all consumer groups
@@ -593,9 +568,8 @@ func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
 				delete(cgs, cg)
 				continue
 			}
-			keys = append(keys, queueInProgressByID(q, cg))
 			keys = append(keys, queueRedo(q, cg))
-			keys = append(keys, queueDone(q, cg))
+			keys = append(keys, queuePointer(q, cg))
 			keyName = append(keyName, cg)
 		}
 		keysNames = append(keysNames, keyName)
@@ -621,9 +595,9 @@ func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
 			cgs := ConsumerGroupStats{
 				InProgress: counts[0],
 				Redo:       counts[1],
-				Done:       counts[2],
 			}
-			cgs.Available = qs.Total - cgs.InProgress - cgs.Redo - cgs.Done
+			// TODO NOPE
+			//cgs.Available = qs.Total - cgs.InProgress - cgs.Redo
 			counts = counts[3:]
 			qs.ConsumerGroupStats[cg] = cgs
 		}
@@ -658,7 +632,6 @@ func cgStatsInfos(cgsm map[string]ConsumerGroupStats) []string {
 		availL = maxLength(availL, "", cgs.Available)
 		inProgL = maxLength(inProgL, "", cgs.InProgress)
 		redoL = maxLength(redoL, "", cgs.Redo)
-		doneL = maxLength(doneL, "", cgs.Done)
 	}
 
 	fmtStr := fmt.Sprintf(
@@ -672,7 +645,7 @@ func cgStatsInfos(cgsm map[string]ConsumerGroupStats) []string {
 
 	var r []string
 	for cg, cgs := range cgsm {
-		r = append(r, fmt.Sprintf(fmtStr, cg, cgs.Available, cgs.InProgress, cgs.Redo, cgs.Done))
+		r = append(r, fmt.Sprintf(fmtStr, cg, cgs.Available, cgs.InProgress, cgs.Redo))
 	}
 	return r
 }

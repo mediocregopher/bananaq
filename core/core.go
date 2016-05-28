@@ -389,12 +389,6 @@ type QuerySelector struct {
 	// Doesn't actually do a query, the output from this selector will simply be
 	// these events.
 	Events []Event
-
-	// Must be set alongside another field in this Selector. Indicates that
-	// instead of discarding the output of the previous QueryAction, its output
-	// and the output from this selector should be merged as a union. That union
-	// then becomes the output of this QuerySelector.
-	Union bool
 }
 
 // QueryFilter will apply a filter to its input, only outputting the Events
@@ -426,10 +420,12 @@ type QueryConditional struct {
 	// empty input through
 	IfInput bool
 
-	// Only do the QueryAction if the given Key has no events in it
+	// Only do the QueryAction if the given Key has no events in it. May be a
+	// set or a SingleKey
 	IfEmpty *Key
 
-	// Only do the QueryAction if the given Key has one or more events in it
+	// Only do the QueryAction if the given Key has one or more events in it.
+	// May be a set or a SingleKey
 	IfNotEmpty *Key
 }
 
@@ -452,9 +448,9 @@ type QueryRemoveByScore struct {
 }
 
 // QuerySingleSet will set the given Key to the first Event in the input. If the
-// input to this action has no events then the Key is unset. If it has more than
-// one Event an error is returned. The output from this action will be the
-// input. The expire on the Event will be used to expire the key
+// input to this action has no events then nothing happens.  The output from
+// this action will be the input. The expire on the Event will be used to expire
+// the key
 //
 // If IfNewer is set, the key will only be set if its ID is newer than the ID of
 // the event already in the Key. This does not change the output in any way
@@ -465,8 +461,8 @@ type QuerySingleSet struct {
 
 // QueryAction describes a single action to take on a set of events. Every
 // action has an input and an output, which are both always sorted
-// chronologically (by ID). Only one single field, apart from QueryConditional,
-// should be set on a QueryAction.
+// chronologically (by ID). Only one single field, apart from QueryConditional
+// or Union, should be set on a QueryAction.
 type QueryAction struct {
 	// Selects a set of Events using various types of logic. See the doc on
 	// QuerySelector for more. By default, a QuerySelector causes this
@@ -500,6 +496,12 @@ type QueryAction struct {
 	// May be set alongside any of the other fields on this struct. See its doc
 	// string for more info
 	QueryConditional
+
+	// Must be set alongside another field in this Selector. Indicates that
+	// instead of discarding the output of the previous QueryAction, its output
+	// and the output from this action should be merged as a union. That union
+	// then becomes the output of this action.
+	Union bool
 }
 
 // QueryActions are a set of actions to take sequentially. A set of QueryActions

@@ -652,8 +652,8 @@ func TestQueryUnion(t *T) {
 				QuerySelector: &QuerySelector{
 					Key:    k,
 					Events: eeB,
-					Union:  true,
 				},
+				Union: true,
 			},
 		},
 	})
@@ -933,29 +933,4 @@ func TestSingleGetSet(t *T) {
 	})
 	require.Nil(t, err)
 	assert.Equal(t, e, ee[0])
-
-	// Unsetting then getting event returns no event
-	ee, err = testCore.Query(QueryActions{
-		KeyBase: key.Base,
-		QueryActions: []QueryAction{
-			{
-				QuerySingleSet: &QuerySingleSet{
-					Key: key,
-				},
-			},
-		},
-	})
-	require.Nil(t, err)
-	assert.Empty(t, ee)
-
-	ee, err = testCore.Query(QueryActions{
-		KeyBase: key.Base,
-		QueryActions: []QueryAction{
-			{
-				SingleGet: &key,
-			},
-		},
-	})
-	require.Nil(t, err)
-	assert.Empty(t, ee)
 }

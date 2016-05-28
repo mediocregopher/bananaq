@@ -111,37 +111,7 @@ query_select = function(input, qs)
     for i = 1,#output do
         output[i] = expandEvent(output[i])
     end
-
-    if qs.Union then
-        local set = {}
-        for i = 1,#output do
-            set[output[i].ID] = output[i]
-        end
-        for i = 1,#input do
-            set[input[i].ID] = input[i]
-        end
-
-        output = {}
-        for _, e in pairs(set) do
-            table.insert(output, e)
-        end
-    end
-
-    -- We always sort the output by ID. It kind of sucks, but there's no way of
-    -- knowing that the events were stored ordered by ID versus something else,
-    -- and for Union we have to do it anyway
-    local ids = {}
-    local byid = {}
-    for i = 1, #output do
-        table.insert(ids, output[i].ID)
-        byid[output[i].ID] = output[i]
-    end
-    table.sort(ids)
-    local sorted_output = {}
-    for i = 1, #ids do
-        table.insert(sorted_output, byid[ids[i]])
-    end
-    return sorted_output
+    return output
 end
 
 local function query_filter(input, qf)
@@ -172,11 +142,11 @@ local function query_conditional(input, qc)
     if qc.IfInput and #input == 0 then return false end
     if qc.IfEmpty then
         local key = keyString(qc.IfEmpty)
-        if redis.call("ZCARD", key) > 0 then return false end
+        if redis.call("EXISTS", key) > 0 then return false end
     end
     if qc.IfNotEmpty then
         local key = keyString(qc.IfNotEmpty)
-        if redis.call("ZCARD", key) == 0 then return false end
+        if redis.call("EXISTS", key) == 0 then return false end
     end
     return true
 end
@@ -240,8 +210,6 @@ local function query_action(input, qa)
             exp = exp + 1 -- add one for funsies
             redis.call("SET", key, input[1].packed)
             redis.call("PEXPIREAT", key, exp)
-        else
-            redis.call("DEL", key)
         end
         return input, false
     end
@@ -261,12 +229,47 @@ local function query_action(input, qa)
     return input, false
 end
 
+local function sort_events(ee)
+    local ids = {}
+    local byid = {}
+    for i = 1, #ee do
+        table.insert(ids, ee[i].ID)
+        byid[ee[i].ID] = ee[i]
+    end
+    table.sort(ids)
+    local sorted_ee = {}
+    for i = 1, #ids do
+        table.insert(sorted_ee, byid[ids[i]])
+    end
+    return sorted_ee
+end
+
 local qas = cmsgpack.unpack(ARGV[2])
 local ee = {}
-local skipped
 for i = 1,#qas.QueryActions do
-    ee, skipped = query_action(ee, qas.QueryActions[i])
+    local qa = qas.QueryActions[i]
+    local newee, skipped = query_action(ee, qa)
     if not skipped and qas.QueryActions[i].Break then break end
+
+    if qa.Union then
+        local set = {}
+        for i = 1,#ee do
+            set[ee[i].ID] = ee[i]
+        end
+        for i = 1,#newee do
+            set[newee[i].ID] = newee[i]
+        end
+
+        newee = {}
+        for _, e in pairs(set) do
+            table.insert(newee, e)
+        end
+    end
+
+    -- We always sort the output by ID. It kind of sucks, but there's no way of
+    -- knowing that the events were stored ordered by ID versus something else,
+    -- and for Union we have to do it anyway
+    ee = sort_events(newee)
 end
 
 for i = 1,#ee do

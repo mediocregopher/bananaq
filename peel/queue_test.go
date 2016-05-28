@@ -42,9 +42,9 @@ func TestAllQueuesCGroups(t *T) {
 	requireAddToKey(t, queueAvailableByID(q1))
 	requireAddToKey(t, queueAvailableByID(q2))
 	requireAddToKey(t, queueAvailableByID(q3))
-	requireAddToKey(t, queueInProgressByID(q1, cg1))
-	requireAddToKey(t, queueInProgressByID(q1, cg2))
-	requireAddToKey(t, queueInProgressByID(q2, cg3))
+	requireAddToKey(t, queueInUseByExpire(q1, cg1))
+	requireAddToKey(t, queueInUseByExpire(q1, cg2))
+	requireAddToKey(t, queueInUseByExpire(q2, cg3))
 
 	m, err := p.AllQueuesConsumerGroups()
 	require.Nil(t, err)
