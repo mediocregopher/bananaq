@@ -601,7 +601,7 @@ func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
 		keysNames = append(keysNames, keyName)
 	}
 
-	counts, err := p.c.SetCounts(keys...)
+	counts, err := p.c.SetCounts(core.QueryScoreRange{}, keys...)
 	if err != nil {
 		return nil, err
 	}
@@ -690,4 +690,5 @@ func (p Peel) QInfo(c QStatusCommand) ([]string, error) {
 		r = append(r, fmt.Sprintf("queue:%q total:%d", q, qs.Total))
 		r = append(r, cgStatsInfos(qs.ConsumerGroupStats)...)
 	}
+	return r, nil
 }

@@ -330,6 +330,20 @@ type QueryScoreRange struct {
 	MaxFromInput bool
 }
 
+func (qsr QueryScoreRange) minmax() (string, string) {
+	mm := func(ts TS, excl bool, inf string) string {
+		if ts == 0 {
+			return inf
+		}
+		tss := ts.String()
+		if excl {
+			tss = "(" + tss
+		}
+		return tss
+	}
+	return mm(qsr.Min, qsr.MinExcl, "-inf"), mm(qsr.Max, qsr.MaxExcl, "+inf")
+}
+
 // QueryEventRangeSelect is used to select all Events within the given range
 // from a Key.
 type QueryEventRangeSelect struct {
@@ -516,8 +530,11 @@ func (c *Core) Query(qas QueryActions) ([]Event, error) {
 }
 
 // SetCounts returns a slice with a number corresponding to the number of Events
-// in each given Key, where each Key contains a set of events.
-func (c *Core) SetCounts(kk ...Key) ([]uint64, error) {
+// in each given Key, where each Key contains a set of events. The
+// QueryScoreRange can be given to specify the range of values in the keys that
+// you want to be counted. The *FromInput fields in the QueryScoreRange cannot
+// be used.
+func (c *Core) SetCounts(qrange QueryScoreRange, kk ...Key) ([]uint64, error) {
 	if len(kk) == 0 {
 		return []uint64{}, nil
 	}
@@ -526,17 +543,18 @@ func (c *Core) SetCounts(kk ...Key) ([]uint64, error) {
 	for i := range kk {
 		keys[i] = kk[i].String(c.o.RedisPrefix)
 	}
+	min, max := qrange.minmax()
 
 	lua := `
 		local ret = {}
 		for i = 1,#KEYS do
-			local c = redis.call("ZCARD", KEYS[i])
+			local c = redis.call("ZCOUNT", KEYS[i], ARGV[1], ARGV[2])
 			table.insert(ret, c)
 		end
 		return ret
 	`
 
-	arr, err := util.LuaEval(c.Cmder, lua, len(keys), keys).Array()
+	arr, err := util.LuaEval(c.Cmder, lua, len(keys), keys, min, max).Array()
 	if err != nil {
 		return nil, err
 	}

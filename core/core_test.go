@@ -717,8 +717,8 @@ func TestQueryBreak(t *T) {
 
 func TestQueryConditionals(t *T) {
 	base := testutil.RandStr()
-	kFull, _ := randPopulatedKey(t, base, 5)
-	kEmpty := randKey(base)
+	keyFull, _ := randPopulatedKey(t, base, 5)
+	keyEmpty := randKey(base)
 	e := requireNewEmptyEvent(t)
 
 	ee, err := testCore.Query(QueryActions{
@@ -729,7 +729,7 @@ func TestQueryConditionals(t *T) {
 					Events: []Event{e},
 				},
 				QueryConditional: QueryConditional{
-					IfEmpty: &kEmpty,
+					IfEmpty: &keyEmpty,
 				},
 			},
 		},
@@ -745,7 +745,7 @@ func TestQueryConditionals(t *T) {
 					Events: []Event{e},
 				},
 				QueryConditional: QueryConditional{
-					IfEmpty: &kFull,
+					IfEmpty: &keyFull,
 				},
 			},
 		},
@@ -763,10 +763,10 @@ func TestQueryConditionals(t *T) {
 				QueryConditional: QueryConditional{
 					And: []QueryConditional{
 						{
-							IfEmpty: &kEmpty,
+							IfEmpty: &keyEmpty,
 						},
 						{
-							IfNotEmpty: &kFull,
+							IfNotEmpty: &keyFull,
 						},
 					},
 				},
@@ -786,10 +786,10 @@ func TestQueryConditionals(t *T) {
 				QueryConditional: QueryConditional{
 					And: []QueryConditional{
 						{
-							IfEmpty: &kEmpty,
+							IfEmpty: &keyEmpty,
 						},
 						{
-							IfEmpty: &kFull,
+							IfEmpty: &keyFull,
 						},
 					},
 				},
@@ -802,12 +802,33 @@ func TestQueryConditionals(t *T) {
 
 func TestSetCounts(t *T) {
 	base := testutil.RandStr()
-	k1, _ := randPopulatedKey(t, base, 5)
+	k1, ee1 := randPopulatedKey(t, base, 5)
 	k2, _ := randPopulatedKey(t, base, 1)
 
-	counts, err := testCore.SetCounts(randKey(base), k1, randKey(base), k2)
+	qsr := QueryScoreRange{}
+	counts, err := testCore.SetCounts(qsr, randKey(base), k1, randKey(base), k2)
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{0, 5, 0, 1}, counts)
+
+	qsr.Min = TS(ee1[0].ID)
+	counts, err = testCore.SetCounts(qsr, k1, k2)
+	require.Nil(t, err)
+	assert.Equal(t, []uint64{5, 1}, counts)
+
+	qsr.MinExcl = true
+	counts, err = testCore.SetCounts(qsr, k1, k2)
+	require.Nil(t, err)
+	assert.Equal(t, []uint64{4, 1}, counts)
+
+	qsr.Max = TS(ee1[4].ID)
+	counts, err = testCore.SetCounts(qsr, k1, k2)
+	require.Nil(t, err)
+	assert.Equal(t, []uint64{4, 0}, counts)
+
+	qsr.MaxExcl = true
+	counts, err = testCore.SetCounts(qsr, k1, k2)
+	require.Nil(t, err)
+	assert.Equal(t, []uint64{3, 0}, counts)
 }
 
 func TestKeyScan(t *T) {
