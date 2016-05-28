@@ -279,10 +279,12 @@ returns its output in a nicely formatted way. The returned value will be an
 array of strings, one per queue, each formatted like so:
 
 ```
-> QINFO foo bar
-< 1) "foo consumerGroup1 total:5 inprogress:1 redo:2 done:1 available:1
-< 2) "foo consumerGroup2 total:5 inprogress:1 redo:2 done:1 available:1
-< 3) "bar consumerGroup  total:5 inprogress:1 redo:2 done:1 available:1
+> QINFO QUEUE foo QUEUE bar GROUP consumerGroup1 GROUP consumerGroup2
+< 1) queue:"foo" total:5
+< 2) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2 done:1
+< 3) consumerGroup:"consumerGroup2" avail:1 inProg:1 redo:2 done:1
+< 4) queue:"bar" total:5
+< 5) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2 done:1
 ```
 
 See QSTATUS for the meaning of the different fields

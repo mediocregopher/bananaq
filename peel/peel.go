@@ -7,6 +7,8 @@
 package peel
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/mediocregopher/bananaq/core"
@@ -582,4 +584,62 @@ func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
 	return m, nil
 }
 
-// TODO QINFO
+// Helper method for QInfo. Given an integer and a string or another integer,
+// returns the max of the given int and the length of the given string or the
+// string form of the given integer
+//
+//	maxLength(2, "foo", 0) // 3
+//	maxLength(2, "", 400) // 3
+//	maxLength(2, "", 4) // 2
+//
+func maxLength(oldMax int, elStr string, elInt uint64) int {
+	if elStrL := len(elStr); elStrL > oldMax {
+		return elStrL
+	}
+	if elIntL := len(strconv.FormatUint(elInt, 10)); elIntL > oldMax {
+		return elIntL
+	}
+	return oldMax
+}
+
+func cgStatsInfos(cgsm map[string]ConsumerGroupStats) []string {
+	var cgL, availL, inProgL, redoL, doneL int
+
+	for cg, cgs := range cgsm {
+		cgL = maxLength(cgL, cg, 0)
+		availL = maxLength(availL, "", cgs.Available)
+		inProgL = maxLength(inProgL, "", cgs.InProgress)
+		redoL = maxLength(redoL, "", cgs.Redo)
+		doneL = maxLength(doneL, "", cgs.Done)
+	}
+
+	fmtStr := fmt.Sprintf(
+		"consumerGroup:%%-%dq  avail:%%-%dd  inProg:%%-%dd  redo:%%-%dd done:%%-%dd",
+		cgL,
+		availL,
+		inProgL,
+		redoL,
+		doneL,
+	)
+
+	var r []string
+	for cg, cgs := range cgsm {
+		r = append(r, fmt.Sprintf(fmtStr, cg, cgs.Available, cgs.InProgress, cgs.Redo, cgs.Done))
+	}
+	return r
+}
+
+// QInfo returns a human readable version of the information from QStatus. It
+// uses the same arguments.
+func (p Peel) QInfo(c QStatusCommand) ([]string, error) {
+	m, err := p.QStatus(c)
+	if err != nil {
+		return nil, err
+	}
+
+	var r []string
+	for q, qs := range m {
+		r = append(r, fmt.Sprintf("queue:%q total:%d", q, qs.Total))
+		r = append(r, cgStatsInfos(qs.ConsumerGroupStats)...)
+	}
+}
