@@ -3,7 +3,51 @@
 // number of clients along-side any number of server instances. None of them
 // need to coordinate with each other.
 //
-// TODO flesh this out
+// Initialization
+//
+// A new peel takes in either a *pool.Pool or a *cluster.Cluster from the
+// radix.v2 package, and can be initialized like so:
+//
+// 	rpool, err := pool.New("tcp", "127.0.0.1:6379", 10)
+//	if err != nil {
+//		panic(err)
+//	}
+//
+//	p, err := peel.New(rpool, nil)
+//	if err != nil {
+//		panic(err)
+//	}
+//
+// Running
+//
+// All peels require that you call the Run method in them in order for them to
+// work properly. Run will block until an error is reached. Additionally, you
+// will need to periodically call Clean on the queues and consumer groups you
+// care about, or CleanAll for a less precise approach. It's not strictly
+// necessary to call Clean, but if you don't do it you'll be wasting memory in
+// redis.
+//
+//	go func() { panic(p.Run() }
+//	go func() {
+//		for range <-time.Tick(20 * time.Second) {
+//			if err := p.CleanAll(); err != nil {
+//				panic(err)
+//			}
+//		}
+//	}
+//
+// After that
+//
+// Once initialization is done, and you're successfully running Peel, you can
+// call any of its methods with any arguments. All command methods are
+// completely thread-safe
+//
+//	_, err := p.QAdd(peel.QAddCommand{
+//		Queue: "foo",
+//		Expire: time.Now().Add(10 * time.Minute),
+//		Contents: "some stuff",
+//	})
+//
 package peel
 
 import (
@@ -354,6 +398,8 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 	return len(ee) > 0, nil
 }
 
+// TODO maybe peel should just do the cleaning automatically?
+
 // Clean finds all the events which were retrieved for the given
 // queue/consumerGroup which weren't ack'd by the deadline, and makes them
 // available to be retrieved again. This should be called periodically for all
@@ -472,6 +518,8 @@ func (p Peel) CleanAll() error {
 	}
 	return err
 }
+
+// TODO would be nice if QSTATUS/QINFO didn't return results on expired events
 
 // QStatusCommand describes the parameters which can be passed into the QStatus
 // command

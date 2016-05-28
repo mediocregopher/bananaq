@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TODO make sure this still works
+
 // This test is looking for any inconsistencies which might appear under load
 // from race-conditions and things of that nature
 func TestConsumerLoad(t *T) {
