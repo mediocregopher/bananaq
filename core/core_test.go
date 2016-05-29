@@ -25,46 +25,49 @@ func init() {
 	go func() { panic(testCore.Run()) }()
 }
 
-func TestNewID(t *T) {
+func TestMonoTS(t *T) {
 	for i := 0; i < 100; i++ {
 		now := time.Now()
 		nowTS := NewTS(now)
-		id, err := testCore.NewID(nowTS)
+		mTS, err := testCore.MonoTS(nowTS)
 		assert.Nil(t, err)
-		assert.Equal(t, ID(nowTS), id)
+		assert.Equal(t, nowTS, mTS)
 
 		// make sure at least the second precision matches, the actual times
 		// won't match exactly because we truncate to microseconds
-		assert.Equal(t, now.Unix(), TS(id).Time().Unix())
+		assert.Equal(t, now.Unix(), mTS.Time().Unix())
 
-		id2, err := testCore.NewID(nowTS)
+		mTS2, err := testCore.MonoTS(nowTS)
 		assert.Nil(t, err)
-		assert.True(t, id2 > id, "id2:%d !> id:%d ", id2, id)
+		assert.True(t, mTS2 > mTS, "mTS2:%d !> mTS:%d ", mTS2, mTS)
 
 		nowTS = NewTS(time.Now())
-		id3, err := testCore.NewID(nowTS)
+		mTS3, err := testCore.MonoTS(nowTS)
 		assert.Nil(t, err)
-		assert.True(t, id3 > id2, "id3:%d !> id2:%d ", id3, id2)
+		assert.True(t, mTS3 > mTS2, "mTS3:%d !> mTS2:%d ", mTS3, mTS2)
 	}
 }
 
 func requireNewID(t *T) ID {
-	id, err := testCore.NewID(NewTS(time.Now()))
+	ts, err := testCore.MonoTS(NewTS(time.Now()))
 	require.Nil(t, err)
-	return id
+	return ID{
+		T:      ts,
+		Expire: NewTS(ts.Time().Add(1 * time.Minute)),
+	}
 }
 
 func requireNewEvent(t *T) Event {
-	ts := NewTS(time.Now().Add(1 * time.Minute))
-	e, err := testCore.NewEvent(ts, testutil.RandStr())
+	ts := NewTS(time.Now())
+	expire := NewTS(ts.Time().Add(1 * time.Minute))
+	e, err := testCore.NewEvent(ts, expire, testutil.RandStr())
 	require.Nil(t, err)
 	return e
 }
 
 func requireNewEmptyEvent(t *T) Event {
-	ts := NewTS(time.Now().Add(1 * time.Minute))
-	e, err := testCore.NewEvent(ts, "")
-	require.Nil(t, err)
+	e := requireNewEvent(t)
+	e.Contents = ""
 	return e
 }
 
@@ -147,9 +150,10 @@ func assertKeyRaw(t *T, k Key, exm map[Event]int64) {
 
 func TestGetSetEvent(t *T) {
 	contents := testutil.RandStr()
+	now := time.Now()
 	expire := time.Now().Add(500 * time.Millisecond)
 
-	e, err := testCore.NewEvent(NewTS(expire), contents)
+	e, err := testCore.NewEvent(NewTS(now), NewTS(expire), contents)
 	require.Nil(t, err)
 
 	assert.Nil(t, testCore.SetEvent(e, 500*time.Millisecond))
@@ -213,8 +217,8 @@ func TestQueryAddScores(t *T) {
 		requireNewEmptyEvent(t),
 		requireNewEmptyEvent(t),
 	}
-	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
-	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[1].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[3].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
 
 	ee2, err := testCore.Query(QueryActions{
 		KeyBase: base,
@@ -244,16 +248,16 @@ func TestQueryAddScores(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, ee, ee2)
 	assertKeyRaw(t, k1, map[Event]int64{
-		ee[0]: int64(ee[0].ID),
-		ee[1]: int64(ee[1].ID),
-		ee[2]: int64(ee[2].ID),
-		ee[3]: int64(ee[3].ID),
+		ee[0]: int64(ee[0].ID.T),
+		ee[1]: int64(ee[1].ID.T),
+		ee[2]: int64(ee[2].ID.T),
+		ee[3]: int64(ee[3].ID.T),
 	})
 	assertKeyRaw(t, k2, map[Event]int64{
-		ee[0]: int64(ee[0].Expire),
-		ee[1]: int64(ee[1].Expire),
-		ee[2]: int64(ee[2].Expire),
-		ee[3]: int64(ee[3].Expire),
+		ee[0]: int64(ee[0].ID.Expire),
+		ee[1]: int64(ee[1].ID.Expire),
+		ee[2]: int64(ee[2].ID.Expire),
+		ee[3]: int64(ee[3].ID.Expire),
 	})
 	assertKeyRaw(t, k3, map[Event]int64{
 		ee[0]: 5,
@@ -274,7 +278,7 @@ func TestQueryRemoveByScore(t *T) {
 			{
 				QueryRemoveByScore: &QueryRemoveByScore{
 					QueryScoreRange: QueryScoreRange{
-						Max:     TS(ee[2].ID),
+						Max:     TS(ee[2].ID.T),
 						MaxExcl: true,
 					},
 					Keys: []Key{k},
@@ -301,8 +305,8 @@ func TestQueryRangeSelect(t *T) {
 					Key: k,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min: TS(ee[1].ID),
-							Max: TS(ee[2].ID),
+							Min: ee[1].ID.T,
+							Max: ee[2].ID.T,
 						},
 					},
 				},
@@ -320,9 +324,9 @@ func TestQueryRangeSelect(t *T) {
 					Key: k,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min:     TS(ee[0].ID),
+							Min:     ee[0].ID.T,
 							MinExcl: true,
-							Max:     TS(ee[3].ID),
+							Max:     ee[3].ID.T,
 							MaxExcl: true,
 						},
 					},
@@ -341,8 +345,8 @@ func TestQueryRangeSelect(t *T) {
 					Key: k,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min: TS(ee[0].ID),
-							Max: TS(ee[3].ID),
+							Min: ee[0].ID.T,
+							Max: ee[3].ID.T,
 						},
 						Offset: 1,
 						Limit:  2,
@@ -362,8 +366,8 @@ func TestQueryRangeSelect(t *T) {
 					Key: k,
 					QueryEventRangeSelect: &QueryEventRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min: TS(ee[1].ID),
-							Max: TS(ee[2].ID),
+							Min: TS(ee[1].ID.T),
+							Max: TS(ee[2].ID.T),
 						},
 						Reverse: true,
 						Limit:   1,
@@ -454,7 +458,7 @@ func TestQueryEventScoreSelect(t *T) {
 					Key: k,
 					QueryEventScoreSelect: &QueryEventScoreSelect{
 						Event: ee[0],
-						Equal: TS(ee[0].ID),
+						Equal: TS(ee[0].ID.T),
 					},
 				},
 			},
@@ -471,7 +475,7 @@ func TestQueryEventScoreSelect(t *T) {
 					Key: k,
 					QueryEventScoreSelect: &QueryEventScoreSelect{
 						Event: ee[0],
-						Min:   TS(ee[0].ID) + 10,
+						Min:   TS(ee[0].ID.T) + 10,
 					},
 				},
 			},
@@ -510,8 +514,8 @@ func TestQueryFiltering(t *T) {
 		requireNewEmptyEvent(t),
 		requireNewEmptyEvent(t),
 	}
-	ee[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
-	ee[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[1].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ee[3].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
 
 	ee2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
@@ -615,8 +619,8 @@ func TestQueryUnion(t *T) {
 		eeA[1],
 		eeB[1],
 	}
-	assert.True(t, eeU[0].ID < eeU[1].ID)
-	assert.True(t, eeU[1].ID < eeU[2].ID)
+	assert.True(t, eeU[0].ID.T < eeU[1].ID.T)
+	assert.True(t, eeU[1].ID.T < eeU[2].ID.T)
 
 	// First test that previous output is overwritten without Union
 	ee2, err := testCore.Query(QueryActions{
@@ -810,7 +814,7 @@ func TestSetCounts(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{0, 5, 0, 1}, counts)
 
-	qsr.Min = TS(ee1[0].ID)
+	qsr.Min = ee1[0].ID.T
 	counts, err = testCore.SetCounts(qsr, k1, k2)
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{5, 1}, counts)
@@ -820,7 +824,7 @@ func TestSetCounts(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{4, 1}, counts)
 
-	qsr.Max = TS(ee1[4].ID)
+	qsr.Max = ee1[4].ID.T
 	counts, err = testCore.SetCounts(qsr, k1, k2)
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{4, 0}, counts)
@@ -890,7 +894,7 @@ func TestSingleGetSet(t *T) {
 
 	// Getting a set event after the expire doesn't return it
 	ee, err = testCore.Query(QueryActions{
-		Now:     (TS(e.Expire) + 1).Time(),
+		Now:     (e.ID.Expire + 1).Time(),
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{
@@ -903,7 +907,7 @@ func TestSingleGetSet(t *T) {
 
 	// Trying to put an older event with IfNewer results in no change
 	e2 := e
-	e2.ID -= 5
+	e2.ID.T -= 5
 	ee, err = testCore.Query(QueryActions{
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{

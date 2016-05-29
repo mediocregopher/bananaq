@@ -148,21 +148,11 @@ func (ts TS) String() string {
 	return strconv.FormatUint(uint64(ts), 10)
 }
 
-// ID identifies a single event across the entire cluster, and is unique for all
-// time. It also represents the point in time at which an event will expire
-type ID TS
-
-// String returns the string form of the ID
-func (id ID) String() string {
-	return TS(id).String()
-}
-
-// NewID returns a new, unique ID corresponding to the given timestamp, which
-// can be used for a new event. All IDs are monotonically increasing across the
-// entire cluster. Consequently, the ID returned might differ in the time it
-// represents from the given TS by a very small amount (or a big amount, if the
-// given time is way in the past).
-func (c Core) NewID(t TS) (ID, error) {
+// MonoTS returns a new, unique TS corresponding to the given timestamp All
+// returns are monotonically increasing across the entire cluster. Consequently,
+// the TS returned might differ in the time it represents from the given TS by a
+// very small amount (or a big amount, if the given time is way in the past).
+func (c Core) MonoTS(t TS) (TS, error) {
 	lua := `
 		local key = KEYS[1]
 		local now_raw = ARGV[1]
@@ -187,7 +177,7 @@ func (c Core) NewID(t TS) (ID, error) {
 		return last_raw
 	`
 
-	idKey := c.o.RedisPrefix + ":id"
+	idKey := c.o.RedisPrefix + ":monots"
 
 	var ib []byte
 	var err error
@@ -196,30 +186,59 @@ func (c Core) NewID(t TS) (ID, error) {
 		ib, err = util.LuaEval(c.Cmder, lua, 1, idKey, nowb).Bytes()
 	}, t)
 
-	var id ID
-	_, err = id.UnmarshalMsg(ib)
-	return id, err
+	var t2 TS
+	_, err = t2.UnmarshalMsg(ib)
+	return t2, err
+}
+
+// ID identifies a single event across the entire cluster, and is unique for all
+// time. It also represents the point in time at which an event will expire
+type ID struct {
+	T      TS
+	Expire TS
+}
+
+// String returns the string form of the ID
+func (id ID) String() string {
+	return fmt.Sprintf("%d_%d", id.T, id.Expire)
+}
+
+// IDFromString takes a string previously returned by an ID's String method and
+// returns the corresponding ID for it
+func IDFromString(idstr string) (ID, error) {
+	p := strings.SplitN(idstr, "_", 2)
+	if len(p) != 2 {
+		return ID{}, errors.New("invalid ID string")
+	}
+	tI, err := strconv.ParseUint(p[0], 10, 64)
+	if err != nil {
+		return ID{}, err
+	}
+	expireI, err := strconv.ParseUint(p[1], 10, 64)
+	if err != nil {
+		return ID{}, err
+	}
+	return ID{T: TS(tI), Expire: TS(expireI)}, nil
 }
 
 // Event describes all the information related to a single event. An event is
 // immutable, nothing in this struct will ever change
 type Event struct {
 	ID       ID
-	Expire   TS
 	Contents string
 }
 
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
-func (c *Core) NewEvent(expire TS, contents string) (Event, error) {
-	id, err := c.NewID(NewTS(time.Now()))
+func (c *Core) NewEvent(now, expire TS, contents string) (Event, error) {
+	nowMono, err := c.MonoTS(now)
 	if err != nil {
 		return Event{}, err
 	}
+	id := ID{nowMono, expire}
 
 	return Event{
 		ID:       id,
-		Expire:   expire,
 		Contents: contents,
 	}, nil
 }
@@ -233,7 +252,7 @@ func pexpireAt(t TS, buffer time.Duration) int64 {
 // integer) added with the given buffer
 func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	k := Key{Base: e.ID.String(), Subs: []string{"event"}}
-	pex := pexpireAt(TS(e.ID), expireBuffer)
+	pex := pexpireAt(e.ID.Expire, expireBuffer)
 	lua := `
 		local key = KEYS[1]
 		local pexpire = ARGV[1]

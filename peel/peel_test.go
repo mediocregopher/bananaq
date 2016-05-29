@@ -94,6 +94,7 @@ func TestQAdd(t *T) {
 
 // score is optional
 func requireAddToKey(t *T, k core.Key, e core.Event, score core.TS) {
+	e.Contents = ""
 	qa := core.QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []core.QueryAction{
@@ -132,16 +133,18 @@ func newTestQueue(t *T, numEvents int) (string, []core.Event) {
 }
 
 func randEmptyEvent(t *T, expired bool) core.Event {
-	id, err := testPeel.c.NewID(core.NewTS(time.Now()))
-	require.Nil(t, err)
+	now := time.Now()
+	nowTS := core.NewTS(now)
 
-	var expire core.TS
+	var expireTS core.TS
 	if expired {
-		expire = core.NewTS(time.Now().Add(-10 * time.Second))
+		expireTS = core.NewTS(now.Add(-10 * time.Second))
 	} else {
-		expire = core.NewTS(time.Now().Add(10 * time.Second))
+		expireTS = core.NewTS(now.Add(10 * time.Second))
 	}
-	return core.Event{ID: id, Expire: expire}
+	e, err := testPeel.c.NewEvent(nowTS, expireTS, "")
+	require.Nil(t, err)
+	return e
 }
 
 func TestQGet(t *T) {
@@ -225,16 +228,16 @@ func TestQGet(t *T) {
 	// Now we're gonna do something mean, and insert an event with an expire
 	// which is before the most recent expire in done
 	contents := testutil.RandStr()
-	expire := core.NewTS(ee[5].Expire.Time().Add(-5 * time.Second))
+	expire := ee[5].ID.Expire.Time().Add(-5 * time.Second)
 	id, err := testPeel.QAdd(QAddCommand{
 		Queue:    queue,
-		Expire:   expire.Time(),
+		Expire:   expire,
 		Contents: contents,
 	})
 	require.Nil(t, err)
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
-	assert.Equal(t, core.Event{ID: id, Expire: expire, Contents: contents}, e)
+	assert.Equal(t, core.Event{ID: id, Contents: contents}, e)
 	assertKey(t, keyInProgAck, ee[0].ID, ee[1].ID)
 	assertSingleKey(t, keyPtr, id)
 	assertKey(t, keyRedo) // assert empty
@@ -293,7 +296,7 @@ func TestQGetBlocking(t *T) {
 			Contents: contents,
 		})
 		require.Nil(t, err)
-		e2ch <- core.Event{ID: id, Expire: expire, Contents: contents}
+		e2ch <- core.Event{ID: id, Contents: contents}
 	}()
 	e = assertBlockFor(500 * time.Millisecond)
 	e2 := <-e2ch
@@ -306,13 +309,13 @@ func TestQAck(t *T) {
 	keyInProgAck := queueInProgressByAck(queue, cgroup)
 	keyPtr := queuePointer(queue, cgroup)
 
-	now := time.Now()
-	requireAddToKey(t, keyInProgAck, ee[0], core.NewTS(now.Add(10*time.Millisecond)))
+	ackDeadline := core.NewTS(ee[0].ID.T.Time().Add(10 * time.Millisecond))
+	requireAddToKey(t, keyInProgAck, ee[0], ackDeadline)
 
 	cmd := QAckCommand{
 		Queue:         queue,
 		ConsumerGroup: cgroup,
-		Event:         ee[0],
+		EventID:       ee[0].ID,
 	}
 	acked, err := testPeel.QAck(cmd)
 	require.Nil(t, err)
@@ -326,9 +329,10 @@ func TestQAck(t *T) {
 	assertKey(t, keyInProgAck)
 	assertSingleKey(t, keyPtr, ee[0].ID)
 
-	requireAddToKey(t, keyInProgAck, ee[1], core.NewTS(now.Add(-10*time.Millisecond)))
+	ackDeadline = core.NewTS(ee[1].ID.T.Time().Add(-10 * time.Millisecond))
+	requireAddToKey(t, keyInProgAck, ee[1], ackDeadline)
 
-	cmd.Event = ee[1]
+	cmd.EventID = ee[1].ID
 	acked, err = testPeel.QAck(cmd)
 	require.Nil(t, err)
 	assert.False(t, acked)
@@ -347,35 +351,35 @@ func TestClean(t *T) {
 	// in progress, has neither expired nor missed its deadline
 	ee0 := randEmptyEvent(t, false)
 	requireAddToKey(t, keyInProgAck, ee0, core.NewTS(now.Add(1*time.Second)))
-	requireAddToKey(t, keyInUse, ee0, ee0.Expire)
+	requireAddToKey(t, keyInUse, ee0, ee0.ID.Expire)
 
 	// in progress, missed its deadline
 	ee1 := randEmptyEvent(t, false)
 	requireAddToKey(t, keyInProgAck, ee1, core.NewTS(now.Add(-10*time.Millisecond)))
-	requireAddToKey(t, keyInUse, ee1, ee1.Expire)
+	requireAddToKey(t, keyInUse, ee1, ee1.ID.Expire)
 
 	// in progress, expired
 	ee2 := randEmptyEvent(t, true)
 	requireAddToKey(t, keyInProgAck, ee2, core.NewTS(now.Add(-10*time.Millisecond)))
-	requireAddToKey(t, keyInUse, ee2, ee2.Expire)
+	requireAddToKey(t, keyInUse, ee2, ee2.ID.Expire)
 
 	// in redo, not expired
 	ee3 := randEmptyEvent(t, false)
 	requireAddToKey(t, keyRedo, ee3, 0)
-	requireAddToKey(t, keyInUse, ee3, ee3.Expire)
+	requireAddToKey(t, keyInUse, ee3, ee3.ID.Expire)
 
 	// in redo, expired
 	ee4 := randEmptyEvent(t, true)
 	requireAddToKey(t, keyRedo, ee4, 0)
-	requireAddToKey(t, keyInUse, ee4, ee4.Expire)
+	requireAddToKey(t, keyInUse, ee4, ee4.ID.Expire)
 
 	// in use (so really just done), not expired
 	ee5 := randEmptyEvent(t, false)
-	requireAddToKey(t, keyInUse, ee5, ee5.Expire)
+	requireAddToKey(t, keyInUse, ee5, ee5.ID.Expire)
 
 	// in use (so really just done), expired
 	ee6 := randEmptyEvent(t, true)
-	requireAddToKey(t, keyInUse, ee6, ee6.Expire)
+	requireAddToKey(t, keyInUse, ee6, ee6.ID.Expire)
 
 	require.Nil(t, testPeel.Clean(queue, cgroup))
 	assertKey(t, keyInProgAck, ee0.ID)
@@ -390,16 +394,16 @@ func TestCleanAvailable(t *T) {
 
 	ee0 := randEmptyEvent(t, false)
 	requireAddToKey(t, keyAvailID, ee0, 0)
-	requireAddToKey(t, keyAvailEx, ee0, ee0.Expire)
+	requireAddToKey(t, keyAvailEx, ee0, ee0.ID.Expire)
 	ee1 := randEmptyEvent(t, true)
 	requireAddToKey(t, keyAvailID, ee1, 0)
-	requireAddToKey(t, keyAvailEx, ee1, ee1.Expire)
+	requireAddToKey(t, keyAvailEx, ee1, ee1.ID.Expire)
 	ee2 := randEmptyEvent(t, false)
 	requireAddToKey(t, keyAvailID, ee2, 0)
-	requireAddToKey(t, keyAvailEx, ee2, ee2.Expire)
+	requireAddToKey(t, keyAvailEx, ee2, ee2.ID.Expire)
 	ee3 := randEmptyEvent(t, true)
 	requireAddToKey(t, keyAvailID, ee3, 0)
-	requireAddToKey(t, keyAvailEx, ee3, ee3.Expire)
+	requireAddToKey(t, keyAvailEx, ee3, ee3.ID.Expire)
 
 	require.Nil(t, testPeel.CleanAvailable(queue))
 	assertKey(t, keyAvailID, ee0.ID, ee2.ID)

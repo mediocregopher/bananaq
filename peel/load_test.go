@@ -71,7 +71,7 @@ func TestConsumerLoad(t *T) {
 				acked, err := testPeel.QAck(QAckCommand{
 					Queue:         queue,
 					ConsumerGroup: cgroup,
-					Event:         e,
+					EventID:       e.ID,
 				})
 				require.Nil(t, err)
 

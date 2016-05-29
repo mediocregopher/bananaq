@@ -91,21 +91,19 @@ type QAddCommand struct {
 	Contents string    // Required
 }
 
-// QAdd adds an event to a queue. The Expire will be used to generate an ID.
-// IDs are monotonically increasing and unique across the cluster, so the ID may
-// correspond to a very slightly greater time than the given Expire. That
-// (potentially slightly greater) time will also be used as the point in time
-// after which the event is no longer valid.
+// QAdd adds an event to a queue. Once Expire is reached the event will no
+// longer be considered valid in the queue, and will eventually be cleaned up.
 func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
-	e, err := p.c.NewEvent(core.NewTS(c.Expire), c.Contents)
+	now := time.Now()
+	e, err := p.c.NewEvent(core.NewTS(now), core.NewTS(c.Expire), c.Contents)
 	if err != nil {
-		return 0, err
+		return core.ID{}, err
 	}
 
 	// We always store the event data itself with an extra 30 seconds until it
 	// expires, just in case a consumer gets it just as its expire time hits
 	if err := p.c.SetEvent(e, 30*time.Second); err != nil {
-		return 0, err
+		return core.ID{}, err
 	}
 
 	keyAvailID := queueAvailableByID(c.Queue)
@@ -134,7 +132,7 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		},
 	}
 	if _, err := p.c.Query(qa); err != nil {
-		return 0, err
+		return core.ID{}, err
 	}
 
 	p.c.KeyNotify(keyAvailID)
@@ -173,7 +171,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 		stopCh := make(chan struct{})
 		pushCh := p.c.KeyWait(keyAvailID, stopCh)
 
-		if e, err := p.qgetDirect(c); err != nil || e.ID != 0 {
+		if e, err := p.qgetDirect(c); err != nil || (e != core.Event{}) {
 			return e, err
 		}
 
@@ -325,9 +323,9 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 // QAckCommand describes the parameters which can be passed into the QAck
 // command
 type QAckCommand struct {
-	Queue         string     // Required
-	ConsumerGroup string     // Required
-	Event         core.Event // Required, Contents field optional
+	Queue         string  // Required
+	ConsumerGroup string  // Required
+	EventID       core.ID // Required
 }
 
 // QAck acknowledges that an event has been successfully processed and should
@@ -336,7 +334,6 @@ type QAckCommand struct {
 // acknowledged. false will be returned if the deadline was missed, and
 // therefore some other consumer may re-process the Event later.
 func (p Peel) QAck(c QAckCommand) (bool, error) {
-	// TODO only require an ID?
 	now := time.Now()
 
 	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
@@ -349,7 +346,7 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 				QuerySelector: &core.QuerySelector{
 					Key: keyInProgAck,
 					QueryEventScoreSelect: &core.QueryEventScoreSelect{
-						Event: c.Event,
+						Event: core.Event{ID: c.EventID},
 						Min:   core.NewTS(now),
 					},
 				},

@@ -45,12 +45,12 @@ end
 -- and the string to use as max
 local function query_score_range(input, qsr)
     if qsr.MinFromInput then
-        if #input > 0 then qsr.Min = input[#input].ID else qsr.Min = 0 end
+        if #input > 0 then qsr.Min = input[#input].ID.T else qsr.Min = 0 end
     end
     local min = formatQEMinMax(qsr.Min, qsr.MinExcl, "-inf")
 
     if qsr.MaxFromInput then
-        if #input > 0 then qsr.Max = input[1].ID else qsr.Max = 0 end
+        if #input > 0 then qsr.Max = input[1].ID.T else qsr.Max = 0 end
     end
     local max = formatQEMinMax(qsr.Max, qsr.MaxExcl, "+inf")
     return min, max
@@ -120,7 +120,7 @@ local function query_filter(input, qf)
         local e = input[i]
         local filter
         if qf.Expired then
-            filter = e.Expire <= nowTS
+            filter = e.ID.Expire <= nowTS
         end
         -- ~= is not equals, which is synonomous with xor
         filter = filter ~= qf.Invert
@@ -163,8 +163,8 @@ local function query_action(input, qa)
         for i = 1, #qa.QueryAddTo.Keys do
             local key = keyString(qa.QueryAddTo.Keys[i])
             for i = 1, #input do
-                local score = input[i].ID
-                if qa.QueryAddTo.ExpireAsScore then score = input[i].Expire end
+                local score = input[i].ID.T
+                if qa.QueryAddTo.ExpireAsScore then score = input[i].ID.Expire end
                 if qa.QueryAddTo.Score > 0 then score = qa.QueryAddTo.Score end
                 redis.call("ZADD", key, score, input[i].packed)
             end
@@ -200,13 +200,13 @@ local function query_action(input, qa)
                 local olde = redis.call("GET", key)
                 if olde then
                     olde = expandEvent(olde)
-                    if olde.ID > input[1].ID then
+                    if olde.ID.T > input[1].ID.T then
                         return input, false
                     end
                 end
             end
 
-            local exp = math.floor(input[1].Expire / 1000) -- to milliseconds
+            local exp = math.floor(input[1].ID.Expire / 1000) -- to milliseconds
             exp = exp + 1 -- add one for funsies
             redis.call("SET", key, input[1].packed)
             redis.call("PEXPIREAT", key, exp)
@@ -219,7 +219,7 @@ local function query_action(input, qa)
         local e = redis.call("GET", key)
         if not e then return {}, false end
         e = expandEvent(e)
-        if e.Expire < nowTS then return {}, false end
+        if e.ID.Expire < nowTS then return {}, false end
         return {e}, false
     end
 
@@ -233,8 +233,8 @@ local function sort_events(ee)
     local ids = {}
     local byid = {}
     for i = 1, #ee do
-        table.insert(ids, ee[i].ID)
-        byid[ee[i].ID] = ee[i]
+        table.insert(ids, ee[i].ID.T)
+        byid[ee[i].ID.T] = ee[i]
     end
     table.sort(ids)
     local sorted_ee = {}
@@ -254,10 +254,10 @@ for i = 1,#qas.QueryActions do
     if qa.Union then
         local set = {}
         for i = 1,#ee do
-            set[ee[i].ID] = ee[i]
+            set[ee[i].ID.T] = ee[i]
         end
         for i = 1,#newee do
-            set[newee[i].ID] = newee[i]
+            set[newee[i].ID.T] = newee[i]
         end
 
         newee = {}
@@ -266,8 +266,8 @@ for i = 1,#qas.QueryActions do
         end
     end
 
-    -- We always sort the output by ID. It kind of sucks, but there's no way of
-    -- knowing that the events were stored ordered by ID versus something else,
+    -- We always sort the output by ID.T. It kind of sucks, but there's no way of
+    -- knowing that the events were stored ordered by ID.T versus something else,
     -- and for Union we have to do it anyway
     ee = sort_events(newee)
 end

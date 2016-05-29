@@ -10,6 +10,7 @@ import (
 // not have to do it
 
 func queueKeyMarshal(k core.Key) core.Key {
+	return k
 	km := core.Key{
 		Base: hex.EncodeToString([]byte(k.Base)),
 		Subs: make([]string, len(k.Subs)),
@@ -21,6 +22,7 @@ func queueKeyMarshal(k core.Key) core.Key {
 }
 
 func queueKeyUnmarshal(k core.Key) core.Key {
+	return k
 	b, _ := hex.DecodeString(k.Base)
 	subs := make([]string, len(k.Subs))
 	for i, sub := range k.Subs {
