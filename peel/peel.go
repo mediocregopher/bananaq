@@ -51,8 +51,6 @@
 package peel
 
 import (
-	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/mediocregopher/bananaq/core"
@@ -102,12 +100,14 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 
 	// We always store the event data itself with an extra 30 seconds until it
 	// expires, just in case a consumer gets it just as its expire time hits
-	if err := p.c.SetEvent(e, 30*time.Second); err != nil {
+	if err = p.c.SetEvent(e, 30*time.Second); err != nil {
 		return core.ID{}, err
 	}
 
-	keyAvailID := queueAvailableByID(c.Queue)
-	keyAvailEx := queueAvailableByExpire(c.Queue)
+	keyAvailID, keyAvailEx, err := queueAvailableKeys(c.Queue)
+	if err != nil {
+		return core.ID{}, err
+	}
 
 	qa := core.QueryActions{
 		KeyBase: keyAvailID.Base,
@@ -163,9 +163,13 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 		return p.qgetDirect(c)
 	}
 
+	keyAvailID, err := queueAvailableByID(c.Queue)
+	if err != nil {
+		return core.Event{}, err
+	}
+
 	now := time.Now()
 	timeoutCh := time.After(c.BlockUntil.Sub(now))
-	keyAvailID := queueAvailableByID(c.Queue)
 
 	for {
 		stopCh := make(chan struct{})
@@ -186,12 +190,21 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 }
 
 func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
+	keyAvailID, err := queueAvailableByID(c.Queue)
+	if err != nil {
+		return core.Event{}, err
+	}
+
+	keys, err := queueCGroupKeys(c.Queue, c.ConsumerGroup)
+	if err != nil {
+		return core.Event{}, err
+	}
+	keyInProgAck := keys[0]
+	keyRedo := keys[1]
+	keyPtr := keys[2]
+	keyInUse := keys[3]
+
 	now := time.Now()
-	keyAvailID := queueAvailableByID(c.Queue)
-	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
-	keyRedo := queueRedo(c.Queue, c.ConsumerGroup)
-	keyPtr := queuePointer(c.Queue, c.ConsumerGroup)
-	keyInUse := queueInUseByExpire(c.Queue, c.ConsumerGroup)
 
 	// Depending on if Expire is set, we might add the event to the inProgs or
 	// done
@@ -336,8 +349,12 @@ type QAckCommand struct {
 func (p Peel) QAck(c QAckCommand) (bool, error) {
 	now := time.Now()
 
-	keyInProgAck := queueInProgressByAck(c.Queue, c.ConsumerGroup)
-	keyPtr := queuePointer(c.Queue, c.ConsumerGroup)
+	keys, err := queueCGroupKeys(c.Queue, c.ConsumerGroup)
+	if err != nil {
+		return false, err
+	}
+	keyInProgAck := keys[0]
+	keyPtr := keys[2]
 
 	qa := core.QueryActions{
 		KeyBase: keyPtr.Base,
@@ -387,9 +404,13 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
 
-	keyInProgAck := queueInProgressByAck(queue, consumerGroup)
-	keyRedo := queueRedo(queue, consumerGroup)
-	keyInUse := queueInUseByExpire(queue, consumerGroup)
+	keys, err := queueCGroupKeys(queue, consumerGroup)
+	if err != nil {
+		return err
+	}
+	keyInProgAck := keys[0]
+	keyRedo := keys[1]
+	keyInUse := keys[3]
 
 	qsr := core.QueryScoreRange{
 		Max: nowTS,
@@ -437,7 +458,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 		Now: now,
 	}
 
-	_, err := p.c.Query(qa)
+	_, err = p.c.Query(qa)
 	return err
 }
 
@@ -447,8 +468,11 @@ func (p Peel) CleanAvailable(queue string) error {
 	now := time.Now()
 	nowTS := core.NewTS(now)
 
-	keyAvailID := queueAvailableByID(queue)
-	keyAvailEx := queueAvailableByExpire(queue)
+	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	if err != nil {
+		return err
+	}
+
 	qa := core.QueryActions{
 		KeyBase: keyAvailID.Base,
 		QueryActions: []core.QueryAction{
@@ -469,7 +493,7 @@ func (p Peel) CleanAvailable(queue string) error {
 		Now: now,
 	}
 
-	_, err := p.c.Query(qa)
+	_, err = p.c.Query(qa)
 	return err
 }
 
@@ -526,6 +550,7 @@ type QueueStats struct {
 	ConsumerGroupStats map[string]ConsumerGroupStats
 }
 
+/*
 // QStatus returns information about the all queues relative to their consumer
 // groups. See the QueueStats docs for more on what exactly is returned.  The
 // Queues and ConsumerGroups parameters can be set to filter the returned data
@@ -662,3 +687,4 @@ func (p Peel) QInfo(c QStatusCommand) ([]string, error) {
 	}
 	return r, nil
 }
+*/

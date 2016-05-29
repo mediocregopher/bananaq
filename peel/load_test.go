@@ -108,10 +108,17 @@ func TestConsumerLoad(t *T) {
 		assert.Contains(t, m, id)
 	}
 
+	keys, err := queueCGroupKeys(queue, cgroup)
+	require.Nil(t, err)
+	keyInProgAck := keys[0]
+	keyRedo := keys[1]
+	//keyPtr := keys[2]
+	//keyInUse := keys[3]
+
 	llog.Info("checking inprogress sets")
-	assertKey(t, queueInProgressByAck(queue, cgroup))
+	assertKey(t, keyInProgAck)
 	llog.Info("checking redo set")
-	assertKey(t, queueRedo(queue, cgroup))
+	assertKey(t, keyRedo)
 	llog.Info("checking done set")
 	// TODO fix this
 	//assertKey(t, queueDone(queue, cgroup), ii...)

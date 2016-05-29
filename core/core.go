@@ -299,7 +299,7 @@ func (c *Core) GetEvent(id ID) (Event, error) {
 // same Base will be stored together and can be interacted with transactionally.
 // Subs is used a further set of identifiers for the Key.
 //
-// All strings in Key should be alphanumeric, and none should be empty
+// The only disallowed character in the strings making up key is ':'
 type Key struct {
 	Base string
 	Subs []string

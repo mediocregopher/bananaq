@@ -77,8 +77,11 @@ func TestQAdd(t *T) {
 	})
 	require.Nil(t, err)
 	assert.NotZero(t, id)
-	assertKey(t, queueAvailableByID(queue), id)
-	assertKey(t, queueAvailableByExpire(queue), id)
+
+	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	require.Nil(t, err)
+	assertKey(t, keyAvailID, id)
+	assertKey(t, keyAvailEx, id)
 
 	e, err := testPeel.c.GetEvent(id)
 	require.Nil(t, err)
@@ -145,11 +148,12 @@ func TestQGet(t *T) {
 		t.Logf("ii[%d]: %d (%#v)", i, id, id)
 	}
 
-	//keyInProgID := queueInProgressByID(queue, cgroup)
-	keyInProgAck := queueInProgressByAck(queue, cgroup)
-	keyRedo := queueRedo(queue, cgroup)
-	keyPtr := queuePointer(queue, cgroup)
-	keyInUse := queueInUseByExpire(queue, cgroup)
+	keys, err := queueCGroupKeys(queue, cgroup)
+	require.Nil(t, err)
+	keyInProgAck := keys[0]
+	keyRedo := keys[1]
+	keyPtr := keys[2]
+	keyInUse := keys[3]
 
 	// Test that a "blank" queue gives us its first event
 	cmd := QGetCommand{
@@ -296,8 +300,11 @@ func TestQGetBlocking(t *T) {
 func TestQAck(t *T) {
 	queue, ii := newTestQueue(t, 2)
 	cgroup := testutil.RandStr()
-	keyInProgAck := queueInProgressByAck(queue, cgroup)
-	keyPtr := queuePointer(queue, cgroup)
+
+	keys, err := queueCGroupKeys(queue, cgroup)
+	require.Nil(t, err)
+	keyInProgAck := keys[0]
+	keyPtr := keys[2]
 
 	ackDeadline := core.NewTS(ii[0].T.Time().Add(10 * time.Millisecond))
 	requireAddToKey(t, keyInProgAck, ii[0], ackDeadline)
@@ -333,9 +340,13 @@ func TestQAck(t *T) {
 func TestClean(t *T) {
 	queue := testutil.RandStr()
 	cgroup := testutil.RandStr()
-	keyInProgAck := queueInProgressByAck(queue, cgroup)
-	keyRedo := queueRedo(queue, cgroup)
-	keyInUse := queueInUseByExpire(queue, cgroup)
+
+	keys, err := queueCGroupKeys(queue, cgroup)
+	require.Nil(t, err)
+	keyInProgAck := keys[0]
+	keyRedo := keys[1]
+	keyInUse := keys[3]
+
 	now := time.Now()
 
 	// in progress, has neither expired nor missed its deadline
@@ -379,8 +390,9 @@ func TestClean(t *T) {
 
 func TestCleanAvailable(t *T) {
 	queue := testutil.RandStr()
-	keyAvailID := queueAvailableByID(queue)
-	keyAvailEx := queueAvailableByExpire(queue)
+
+	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	require.Nil(t, err)
 
 	ii0 := randID(t, false)
 	requireAddToKey(t, keyAvailID, ii0, 0)
