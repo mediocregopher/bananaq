@@ -1,6 +1,10 @@
 local nowTS = cmsgpack.unpack(ARGV[1])
 local prefix = ARGV[3]
 
+-- For the result field, but we have to declare it before it's used for whatever
+-- reason
+local counts = {}
+
 local function debug(wat)
     redis.call("SET", "debug", cjson.encode(wat))
 end
@@ -161,6 +165,19 @@ local function query_action(input, qa)
 
     if qa.QuerySelector then return query_select(input, qa.QuerySelector), false end
 
+    if qa.QueryCount then
+        local qc = qa.QueryCount
+        local key = keyString(qc.Key)
+        local min, max = query_score_range(input, qc.QueryScoreRange)
+        table.insert(counts, redis.call("ZCOUNT", key, min, max))
+        return input, false
+    end
+
+    if qa.CountInput then
+        table.insert(counts, #input)
+        return input, false
+    end
+
     if qa.QueryAddTo then
         for i = 1, #qa.QueryAddTo.Keys do
             local key = keyString(qa.QueryAddTo.Keys[i])
@@ -278,4 +295,4 @@ for i = 1,#ii do
     ii[i].packed = nil
 end
 
-return cmsgpack.pack({IDs = ii})
+return cmsgpack.pack({IDs = ii, Counts = counts})

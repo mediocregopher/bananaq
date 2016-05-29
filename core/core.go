@@ -344,20 +344,6 @@ type QueryScoreRange struct {
 	MaxFromInput bool
 }
 
-func (qsr QueryScoreRange) minmax() (string, string) {
-	mm := func(ts TS, excl bool, inf string) string {
-		if ts == 0 {
-			return inf
-		}
-		tss := ts.String()
-		if excl {
-			tss = "(" + tss
-		}
-		return tss
-	}
-	return mm(qsr.Min, qsr.MinExcl, "-inf"), mm(qsr.Max, qsr.MaxExcl, "+inf")
-}
-
 // QueryRangeSelect is used to select all elements within the given range from a
 // Key.
 type QueryRangeSelect struct {
@@ -403,6 +389,14 @@ type QuerySelector struct {
 	// Doesn't actually do a query, the output from this selector will simply be
 	// these IDs.
 	IDs []ID
+}
+
+// QueryCount will count the number of elements within the Key which fall into
+// the given QueryScoreRange. The input to this action is passed straight into
+// the output. The count is appended to the Counts field in the QueryRes
+type QueryCount struct {
+	Key
+	QueryScoreRange
 }
 
 // QueryFilter will apply a filter to its input, only outputting the IDs
@@ -481,6 +475,13 @@ type QueryAction struct {
 	// output.
 	*QuerySelector
 
+	// Counts elements in a Key. See its doc string for more info
+	*QueryCount
+
+	// If true will count the number of IDs in the input to this action, append
+	// that count to the result, and pass that input through as the output.
+	CountInput bool
+
 	// Adds the input IDs to the given Keys. See its doc string for more info
 	*QueryAddTo
 
@@ -520,7 +521,8 @@ type QueryAction struct {
 // to output some set of IDs, which become the input for the next QueryAction.
 // The initial set of IDs is empty, so the first QueryAction should always have
 // a QuerySelector to start things off. The final QueryAction's output will be
-// the output set of IDs from the Query method.
+// the output set of IDs from the Query method, as well as the set of results
+// from all Count operations which occurred during the query.
 type QueryActions struct {
 	// This must match the Base field on all Keys being used in this pipeline
 	KeyBase      string
@@ -533,7 +535,8 @@ type QueryActions struct {
 
 // QueryRes contains all the return values from a Query
 type QueryRes struct {
-	IDs []ID
+	IDs    []ID
+	Counts []uint64
 }
 
 // Query performs the given QueryActions pipeline. Whatever the final output
@@ -564,47 +567,6 @@ func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 		res.IDs = []ID{}
 	}
 	return res, nil
-}
-
-// SetCounts returns a slice with a number corresponding to the number of Events
-// in each given Key, where each Key contains a set of IDs. The QueryScoreRange
-// can be given to specify the range of values in the keys that you want to be
-// counted. The *FromInput fields in the QueryScoreRange cannot be used.
-func (c *Core) SetCounts(qrange QueryScoreRange, kk ...Key) ([]uint64, error) {
-	if len(kk) == 0 {
-		return []uint64{}, nil
-	}
-
-	keys := make([]string, len(kk))
-	for i := range kk {
-		keys[i] = kk[i].String(c.o.RedisPrefix)
-	}
-	min, max := qrange.minmax()
-
-	lua := `
-		local ret = {}
-		for i = 1,#KEYS do
-			local c = redis.call("ZCOUNT", KEYS[i], ARGV[1], ARGV[2])
-			table.insert(ret, c)
-		end
-		return ret
-	`
-
-	arr, err := util.LuaEval(c.Cmder, lua, len(keys), keys, min, max).Array()
-	if err != nil {
-		return nil, err
-	}
-
-	ret := make([]uint64, len(arr))
-	for i := range arr {
-		c, err := arr[i].Int64()
-		if err != nil {
-			return nil, err
-		}
-		ret[i] = uint64(c)
-	}
-
-	return ret, nil
 }
 
 // KeyScan returns all the Keys matching the given Key pattern. At least one

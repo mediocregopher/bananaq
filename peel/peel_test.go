@@ -110,6 +110,26 @@ func requireAddToKey(t *T, k core.Key, id core.ID, score core.TS) {
 	require.Nil(t, err)
 }
 
+func requireSetSingleKey(t *T, k core.Key, id core.ID) {
+	qa := core.QueryActions{
+		KeyBase: k.Base,
+		QueryActions: []core.QueryAction{
+			{
+				QuerySelector: &core.QuerySelector{
+					IDs: []core.ID{id},
+				},
+			},
+			{
+				QuerySingleSet: &core.QuerySingleSet{
+					Key: k,
+				},
+			},
+		},
+	}
+	_, err := testPeel.c.Query(qa)
+	require.Nil(t, err)
+}
+
 func newTestQueue(t *T, numIDs int) (string, []core.ID) {
 	queue := testutil.RandStr()
 	var ii []core.ID
@@ -411,39 +431,53 @@ func TestCleanAvailable(t *T) {
 	assertKey(t, keyAvailID, ii0, ii2)
 }
 
-/*
 func TestQStatus(t *T) {
-	queue, ee := newTestQueue(t, 6)
-	cgroup := testutil.RandStr()
-	keyInProgID := queueInProgressByID(queue, cgroup)
-	keyPtr := queuePointer(queue, cgroup)
-	keyRedo := queueRedo(queue, cgroup)
+	queue, ii := newTestQueue(t, 6)
+	cg1 := testutil.RandStr()
+	cg2 := testutil.RandStr()
 
-	requireAddToKey(t, keyInProgID, ee[0], 0)
-	requireAddToKey(t, keyPtr, ee[1], 0)
-	requireAddToKey(t, keyPtr, ee[2], 0)
-	requireAddToKey(t, keyRedo, ee[3], 0)
+	keys, err := queueCGroupKeys(queue, cg1)
+	require.Nil(t, err)
+	keyInProgAck := keys[0]
+	keyRedo := keys[1]
+	keyPtr := keys[2]
 
-	qs, err := testPeel.QStatus(QStatusCommand{
-		Queues:         []string{queue},
-		ConsumerGroups: []string{cgroup},
-	})
+	requireAddToKey(t, keyInProgAck, ii[0], core.NewTS(time.Now().Add(1*time.Minute)))
+	requireAddToKey(t, keyInProgAck, ii[1], core.NewTS(time.Now().Add(1*time.Minute)))
+	requireSetSingleKey(t, keyPtr, ii[2])
+	requireAddToKey(t, keyRedo, ii[2], 0)
+
+	cmd := QStatusCommand{
+		QueuesConsumerGroups: map[string][]string{
+			queue: []string{cg1},
+			queue: []string{cg1, cg2},
+		},
+	}
+	qsm, err := testPeel.QStatus(cmd)
 	require.Nil(t, err)
 
 	expected := map[string]QueueStats{
 		queue: QueueStats{
 			Total: 6,
 			ConsumerGroupStats: map[string]ConsumerGroupStats{
-				cgroup: ConsumerGroupStats{
-					InProgress: 1,
-					Done:       2,
+				cg1: ConsumerGroupStats{
+					InProgress: 2,
 					Redo:       1,
-					Available:  2,
+					Available:  3,
+				},
+				cg2: ConsumerGroupStats{
+					Available: 6,
 				},
 			},
 		},
 	}
+	assert.Equal(t, expected, qsm)
 
-	assert.Equal(t, expected, qs)
+	lines, err := testPeel.QInfo(cmd)
+	require.Nil(t, err)
+	// We don't need to try and assert what the lines are, but just print them
+	// out so I might notice if they get wonky somehow
+	for _, line := range lines {
+		t.Log(line)
+	}
 }
-*/

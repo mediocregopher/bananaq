@@ -192,7 +192,8 @@ consumer).
 
 Get information about all active queues and consumer groups. `QUEUE queue` and
 `GROUP consumerGroup` may both be specified zero or more times each to only
-retrieve information about specific queues and consumer groups.
+retrieve information about specific queues and consumer groups. A `QUEUE` must
+be specified if a `GROUP` is specified.
 
 An array structure is returned with the following layout:
 
@@ -250,17 +251,14 @@ The statistic maps each contain these keys/values:
   be the same across all consumer groups for that queue).
 
 * inprogress - The number of events marked as in-progress (i.e. are awaiting
-  being [QACK'd](#qack)) for this consumer group
+  being [QACK'd](#qack)) for this consumer group. This includes expired events.
 
 * redo - The number of events which were marked as in-progress but were
   timedout, and so are currently available for consuming again by this
-  consumer group.
-
-* done - The number of events which are have been consumed and acknowledged
-  successfully by consumers in this consumer group.
+  consumer group. This includes expired events.
 
 * available - The number of events which are available for being consumed by a
-  consumer in this consumer group.
+  consumer in this consumer group. This includes expired events.
 
 *NOTE that there may in the future be more information returned in the
 statistics maps returned by this call; do not assume that they will always be of
@@ -281,10 +279,10 @@ array of strings, one per queue, each formatted like so:
 ```
 > QINFO QUEUE foo QUEUE bar GROUP consumerGroup1 GROUP consumerGroup2
 < 1) queue:"foo" total:5
-< 2) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2 done:1
-< 3) consumerGroup:"consumerGroup2" avail:1 inProg:1 redo:2 done:1
+< 2) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2
+< 3) consumerGroup:"consumerGroup2" avail:1 inProg:1 redo:2
 < 4) queue:"bar" total:5
-< 5) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2 done:1
+< 5) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2
 ```
 
 See QSTATUS for the meaning of the different fields

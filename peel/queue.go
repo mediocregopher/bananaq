@@ -111,9 +111,9 @@ func queueCGroupKeys(queue, cgroup string) ([4]core.Key, error) {
 ////////////////////////////////////////////////////////////////////////////////
 
 // AllQueuesConsumerGroups returns a map whose keys are all the currently known
-// queues, and the keys for the sub-maps are the known consumer groups for each
-// queue.
-func (p Peel) AllQueuesConsumerGroups() (map[string]map[string]struct{}, error) {
+// queues, and the values are a list of known consumer groups for each queue. A
+// queue may have no known consumer groups, but the slice will never be nil.
+func (p Peel) AllQueuesConsumerGroups() (map[string][]string, error) {
 	kk, err := p.c.KeyScan(core.Key{Base: "*", Subs: []string{"*"}})
 	if err != nil {
 		return nil, err
@@ -132,5 +132,14 @@ func (p Peel) AllQueuesConsumerGroups() (map[string]map[string]struct{}, error) 
 		}
 		m[k.Base][k.Subs[0]] = struct{}{}
 	}
-	return m, nil
+
+	outm := map[string][]string{}
+	for q, cgm := range m {
+		outm[q] = make([]string, 0, len(cgm))
+		for cg := range cgm {
+			outm[q] = append(outm[q], cg)
+		}
+	}
+
+	return outm, nil
 }

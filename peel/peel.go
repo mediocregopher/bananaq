@@ -51,6 +51,8 @@
 package peel
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/mediocregopher/bananaq/core"
@@ -509,7 +511,7 @@ func (p Peel) CleanAll() error {
 		if err = p.CleanAvailable(q); err != nil {
 			return err
 		}
-		for cg := range cgs {
+		for _, cg := range cgs {
 			if err = p.Clean(q, cg); err != nil {
 				return err
 			}
@@ -518,16 +520,9 @@ func (p Peel) CleanAll() error {
 	return err
 }
 
-// TODO would be nice if QSTATUS/QINFO didn't return results on expired events
-
-// QStatusCommand describes the parameters which can be passed into the QStatus
-// command
-type QStatusCommand struct {
-	Queues         []string
-	ConsumerGroups []string
-}
-
-// ConsumerGroupStats are available statistics about a queue/consumer group
+// ConsumerGroupStats are available statistics about a queue/consumer group.
+// Note that these numbers include events which have expired but haven't been
+// cleaned out of the consumer group's data yet.
 type ConsumerGroupStats struct {
 	// Number of events the consumer group has yet to process for the queue
 	Available uint64
@@ -542,7 +537,7 @@ type ConsumerGroupStats struct {
 // QueueStats are available statistics about a queue across all consumer groups
 type QueueStats struct {
 	// Number of events for the queue in the system. Will be the same regardless
-	// of consumer group
+	// of consumer group. Does NOT include expired events.
 	Total uint64
 
 	// Statistics for each consumer group known for the queue. The key will be
@@ -550,91 +545,122 @@ type QueueStats struct {
 	ConsumerGroupStats map[string]ConsumerGroupStats
 }
 
-/*
+func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
+	now := core.NewTS(time.Now())
+	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	if err != nil {
+		return QueueStats{}, err
+	}
 
-* ZCOUNT availByID now +inf (total)
+	qa := core.QueryActions{
+		KeyBase: keyAvailEx.Base,
+		QueryActions: []core.QueryAction{
+			{
+				QueryCount: &core.QueryCount{
+					Key: keyAvailEx,
+					QueryScoreRange: core.QueryScoreRange{
+						Min: now,
+					},
+				},
+			},
+		},
+	}
+	for _, cg := range cgroups {
+		var keys [4]core.Key
+		if keys, err = queueCGroupKeys(queue, cg); err != nil {
+			return QueueStats{}, err
+		}
+		keyInProgAck := keys[0]
+		keyRedo := keys[1]
+		keyPtr := keys[2]
 
-* GET ptr
-* ZCOUNT availByID ptr +inf (remaining)
+		qa.QueryActions = append(
+			qa.QueryActions,
+			core.QueryAction{
+				SingleGet: &keyPtr,
+			},
+			core.QueryAction{
+				QueryCount: &core.QueryCount{
+					Key: keyAvailID,
+					QueryScoreRange: core.QueryScoreRange{
+						MinExcl:      true,
+						MinFromInput: true,
+					},
+				},
+			},
+			core.QueryAction{
+				QuerySelector: &core.QuerySelector{
+					Key:            keyInProgAck,
+					PosRangeSelect: []int64{0, -1},
+				},
+			},
+			core.QueryAction{
+				CountInput: true,
+			},
+			core.QueryAction{
+				QuerySelector: &core.QuerySelector{
+					Key:            keyRedo,
+					PosRangeSelect: []int64{0, -1},
+				},
+			},
+			core.QueryAction{
+				CountInput: true,
+			},
+		)
+	}
 
- */
+	res, err := p.c.Query(qa)
+	if err != nil {
+		return QueueStats{}, err
+	}
 
-/*
-// QStatus returns information about the all queues relative to their consumer
-// groups. See the QueueStats docs for more on what exactly is returned.  The
-// Queues and ConsumerGroups parameters can be set to filter the returned data
-// to only the given queues/consumer groups. If either is not set no filtering
-// will be done on that level.
+	qs := QueueStats{
+		Total:              res.Counts[0],
+		ConsumerGroupStats: map[string]ConsumerGroupStats{},
+	}
+	res.Counts = res.Counts[1:]
+
+	for _, cg := range cgroups {
+		qs.ConsumerGroupStats[cg] = ConsumerGroupStats{
+			Available:  res.Counts[0],
+			InProgress: res.Counts[1],
+			Redo:       res.Counts[2],
+		}
+		res.Counts = res.Counts[3:]
+	}
+	return qs, nil
+}
+
+// QStatusCommand describes the parameters which can be passed into the QStatus
+// command
+type QStatusCommand struct {
+	QueuesConsumerGroups map[string][]string
+}
+
+// QStatus returns information about the all queues and their consumer groups.
+// QueuesConsumerGroups may be set to specify specific queue/consumer group
+// combinations to retrieve, otherwise all known queues/consumer groups will be
+// retrieved.
 func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
-	// TODO this could be implemented in a much cleaner way
-	qcg, err := p.AllQueuesConsumerGroups()
-	if err != nil {
-		return nil, err
+	var qcg map[string][]string
+	var err error
+	if len(c.QueuesConsumerGroups) > 0 {
+		qcg = c.QueuesConsumerGroups
+	} else {
+		if qcg, err = p.AllQueuesConsumerGroups(); err != nil {
+			return nil, err
+		}
 	}
 
-	filtered := func(s string, l []string) bool {
-		if l == nil {
-			return false
-		}
-		for _, ls := range l {
-			if ls == s {
-				return false
-			}
-		}
-		return true
-	}
-
-	keys := make([]core.Key, 0, len(qcg))
-	keysNames := make([][]string, 0, len(qcg))
+	ret := map[string]QueueStats{}
 	for q, cgs := range qcg {
-		if filtered(q, c.Queues) {
-			delete(qcg, q)
-			continue
+		qs, err := p.qstatus(q, cgs)
+		if err != nil {
+			return nil, err
 		}
-		keys = append(keys, queueAvailableByID(q))
-		keyName := make([]string, 1, len(cgs)+1)
-		keyName[0] = q
-		for cg := range cgs {
-			if filtered(cg, c.ConsumerGroups) {
-				delete(cgs, cg)
-				continue
-			}
-			keys = append(keys, queueRedo(q, cg))
-			keys = append(keys, queuePointer(q, cg))
-			keyName = append(keyName, cg)
-		}
-		keysNames = append(keysNames, keyName)
+		ret[q] = qs
 	}
-
-	counts, err := p.c.SetCounts(core.QueryScoreRange{}, keys...)
-	if err != nil {
-		return nil, err
-	}
-
-	m := map[string]QueueStats{}
-	for _, keyName := range keysNames {
-		q := keyName[0]
-		keyName = keyName[1:]
-
-		qs := QueueStats{
-			Total:              counts[0],
-			ConsumerGroupStats: map[string]ConsumerGroupStats{},
-		}
-		counts = counts[1:]
-
-		for _, cg := range keyName {
-			cgs := ConsumerGroupStats{
-				InProgress: counts[0],
-				Redo:       counts[1],
-			}
-			// TODO NOPE
-			//cgs.Available = qs.Total - cgs.InProgress - cgs.Redo
-			counts = counts[3:]
-			qs.ConsumerGroupStats[cg] = cgs
-		}
-		m[q] = qs
-	}
-	return m, nil
+	return ret, nil
 }
 
 // Helper method for QInfo. Given an integer and a string or another integer,
@@ -656,7 +682,7 @@ func maxLength(oldMax int, elStr string, elInt uint64) int {
 }
 
 func cgStatsInfos(cgsm map[string]ConsumerGroupStats) []string {
-	var cgL, availL, inProgL, redoL, doneL int
+	var cgL, availL, inProgL, redoL int
 
 	for cg, cgs := range cgsm {
 		cgL = maxLength(cgL, cg, 0)
@@ -666,12 +692,11 @@ func cgStatsInfos(cgsm map[string]ConsumerGroupStats) []string {
 	}
 
 	fmtStr := fmt.Sprintf(
-		"consumerGroup:%%-%dq  avail:%%-%dd  inProg:%%-%dd  redo:%%-%dd done:%%-%dd",
+		"consumerGroup:%%-%dq avail:%%-%dd inProg:%%-%dd redo:%%-%dd",
 		cgL,
 		availL,
 		inProgL,
 		redoL,
-		doneL,
 	)
 
 	var r []string
@@ -696,4 +721,3 @@ func (p Peel) QInfo(c QStatusCommand) ([]string, error) {
 	}
 	return r, nil
 }
-*/

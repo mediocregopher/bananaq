@@ -785,35 +785,61 @@ func TestQueryConditionals(t *T) {
 	assert.Empty(t, res.IDs)
 }
 
-func TestSetCounts(t *T) {
+func TestQueryCount(t *T) {
 	base := testutil.RandStr()
 	k1, ii1 := randPopulatedKey(t, base, 5)
 	k2, _ := randPopulatedKey(t, base, 1)
-
 	qsr := QueryScoreRange{}
-	counts, err := testCore.SetCounts(qsr, randKey(base), k1, randKey(base), k2)
-	require.Nil(t, err)
-	assert.Equal(t, []uint64{0, 5, 0, 1}, counts)
+
+	assertCounts := func(a, b uint64) {
+		res, err := testCore.Query(QueryActions{
+			KeyBase: base,
+			QueryActions: []QueryAction{
+				{
+					QueryCount: &QueryCount{Key: k1, QueryScoreRange: qsr},
+				},
+				{
+					QueryCount: &QueryCount{Key: k2, QueryScoreRange: qsr},
+				},
+			},
+		})
+		require.Nil(t, err)
+		assert.Equal(t, []uint64{a, b}, res.Counts)
+	}
+
+	assertCounts(5, 1)
 
 	qsr.Min = ii1[0].T
-	counts, err = testCore.SetCounts(qsr, k1, k2)
-	require.Nil(t, err)
-	assert.Equal(t, []uint64{5, 1}, counts)
+	assertCounts(5, 1)
 
 	qsr.MinExcl = true
-	counts, err = testCore.SetCounts(qsr, k1, k2)
-	require.Nil(t, err)
-	assert.Equal(t, []uint64{4, 1}, counts)
+	assertCounts(4, 1)
 
 	qsr.Max = ii1[4].T
-	counts, err = testCore.SetCounts(qsr, k1, k2)
-	require.Nil(t, err)
-	assert.Equal(t, []uint64{4, 0}, counts)
+	assertCounts(4, 0)
 
 	qsr.MaxExcl = true
-	counts, err = testCore.SetCounts(qsr, k1, k2)
+	assertCounts(3, 0)
+
+	res, err := testCore.Query(QueryActions{
+		KeyBase: base,
+		QueryActions: []QueryAction{
+			{
+				QuerySelector: &QuerySelector{
+					Key: k1,
+					QueryRangeSelect: &QueryRangeSelect{
+						QueryScoreRange: qsr,
+					},
+				},
+			},
+			{
+				CountInput: true,
+			},
+		},
+	})
 	require.Nil(t, err)
-	assert.Equal(t, []uint64{3, 0}, counts)
+	assert.Equal(t, 3, len(res.IDs))
+	assert.Equal(t, uint64(3), res.Counts[0])
 }
 
 func TestKeyScan(t *T) {
