@@ -42,13 +42,13 @@ func assertKey(t *T, k core.Key, ii ...core.ID) {
 			},
 		},
 	}
-	ii2, err := testPeel.c.Query(qa)
+	res, err := testPeel.c.Query(qa)
 	require.Nil(t, err)
 
 	if len(ii) == 0 {
-		assert.Empty(t, ii2)
+		assert.Empty(t, res.IDs)
 	} else {
-		assert.Equal(t, ii, ii2)
+		assert.Equal(t, ii, res.IDs)
 	}
 }
 
@@ -61,10 +61,10 @@ func assertSingleKey(t *T, k core.Key, id core.ID) {
 			},
 		},
 	}
-	ii, err := testPeel.c.Query(qa)
+	res, err := testPeel.c.Query(qa)
 	require.Nil(t, err)
-	require.NotEmpty(t, ii)
-	assert.Equal(t, id, ii[0])
+	require.NotEmpty(t, res.IDs)
+	assert.Equal(t, id, res.IDs[0])
 }
 
 func TestQAdd(t *T) {

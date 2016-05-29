@@ -323,14 +323,14 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		Now:          now,
 	}
 
-	ii, err := p.c.Query(qa)
+	res, err := p.c.Query(qa)
 	if err != nil {
 		return core.Event{}, err
-	} else if len(ii) == 0 {
+	} else if len(res.IDs) == 0 {
 		return core.Event{}, nil
 	}
 
-	return p.c.GetEvent(ii[0])
+	return p.c.GetEvent(res.IDs[0])
 }
 
 // QAckCommand describes the parameters which can be passed into the QAck
@@ -387,11 +387,11 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 		Now: now,
 	}
 
-	ii, err := p.c.Query(qa)
+	res, err := p.c.Query(qa)
 	if err != nil {
 		return false, err
 	}
-	return len(ii) > 0, nil
+	return len(res.IDs) > 0, nil
 }
 
 // TODO maybe peel should just do the cleaning automatically?
@@ -549,6 +549,15 @@ type QueueStats struct {
 	// the consumer group's name
 	ConsumerGroupStats map[string]ConsumerGroupStats
 }
+
+/*
+
+* ZCOUNT availByID now +inf (total)
+
+* GET ptr
+* ZCOUNT availByID ptr +inf (remaining)
+
+ */
 
 /*
 // QStatus returns information about the all queues relative to their consumer

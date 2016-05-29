@@ -221,12 +221,6 @@ func IDFromString(idstr string) (ID, error) {
 	return ID{T: TS(tI), Expire: TS(expireI)}, nil
 }
 
-// IDs is a wrapper around a slice of ID structs, useful for MessagePack
-// encoding/decoding
-type IDs struct {
-	IDs []ID
-}
-
 // Event describes all the information related to a single event. An event is
 // immutable, nothing in this struct will ever change
 type Event struct {
@@ -537,35 +531,39 @@ type QueryActions struct {
 	Now time.Time `msg:"-"`
 }
 
+// QueryRes contains all the return values from a Query
+type QueryRes struct {
+	IDs []ID
+}
+
 // Query performs the given QueryActions pipeline. Whatever the final output
 // from the pipeline is is returned.
-func (c *Core) Query(qas QueryActions) ([]ID, error) {
+func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 	var err error
 
 	if qas.Now.IsZero() {
 		qas.Now = time.Now()
 	}
 
-	var iib []byte
+	var resb []byte
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
 		k := Key{Base: qas.KeyBase}.String(c.o.RedisPrefix)
-		iib, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
+		resb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
 	}, NewTS(qas.Now), &qas)
 	if err != nil {
-		return nil, err
+		return QueryRes{}, err
 	}
 
-	var ii IDs
-	if _, err = ii.UnmarshalMsg(iib); err != nil {
-		return nil, err
+	var res QueryRes
+	if _, err = res.UnmarshalMsg(resb); err != nil {
+		return QueryRes{}, err
 	}
-	if ii.IDs == nil {
-		ii.IDs = []ID{}
+	if res.IDs == nil {
+		res.IDs = []ID{}
 	}
-
-	return ii.IDs, nil
+	return res, nil
 }
 
 // SetCounts returns a slice with a number corresponding to the number of Events
