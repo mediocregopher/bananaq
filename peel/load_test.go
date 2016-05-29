@@ -24,7 +24,7 @@ func TestConsumerLoad(t *T) {
 
 	numEvents := 10000
 	llog.Info("creating test queue", llog.KV{"numEvents": numEvents})
-	queue, ee := newTestQueue(t, numEvents)
+	queue, ii := newTestQueue(t, numEvents)
 	cgroup := testutil.RandStr()
 	llog.Info("test queue created", llog.KV{"queue": queue, "cgroup": cgroup})
 
@@ -93,7 +93,7 @@ func TestConsumerLoad(t *T) {
 	for id := range ch {
 		require.NotContains(t, m, id)
 		m[id] = true
-		if lm := len(m); lm == len(ee) {
+		if lm := len(m); lm == len(ii) {
 			break
 		} else if lm%(numEvents/20) == 0 {
 			llog.Info("progress", llog.KV{"len(m)": lm})
@@ -102,21 +102,17 @@ func TestConsumerLoad(t *T) {
 	close(ch)
 
 	llog.Info("checking m length")
-	assert.Len(t, m, len(ee))
+	assert.Len(t, m, len(ii))
 	llog.Info("checking each id in m")
-	for _, e := range ee {
-		assert.Contains(t, m, e.ID)
+	for _, id := range ii {
+		assert.Contains(t, m, id)
 	}
 
-	eeids := make([]core.ID, len(ee))
-	for i := range ee {
-		eeids[i] = ee[i].ID
-	}
 	llog.Info("checking inprogress sets")
 	assertKey(t, queueInProgressByAck(queue, cgroup))
 	llog.Info("checking redo set")
 	assertKey(t, queueRedo(queue, cgroup))
 	llog.Info("checking done set")
 	// TODO fix this
-	//assertKey(t, queueDone(queue, cgroup), eeids...)
+	//assertKey(t, queueDone(queue, cgroup), ii...)
 }

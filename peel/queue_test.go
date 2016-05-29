@@ -18,7 +18,7 @@ func TestAllQueuesCGroups(t *T) {
 			QueryActions: []core.QueryAction{
 				{
 					QuerySelector: &core.QuerySelector{
-						Events: []core.Event{randEmptyEvent(t, false)},
+						IDs: []core.ID{randID(t, false)},
 					},
 				},
 				{

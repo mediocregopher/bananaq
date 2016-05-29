@@ -57,20 +57,6 @@ func requireNewID(t *T) ID {
 	}
 }
 
-func requireNewEvent(t *T) Event {
-	ts := NewTS(time.Now())
-	expire := NewTS(ts.Time().Add(1 * time.Minute))
-	e, err := testCore.NewEvent(ts, expire, testutil.RandStr())
-	require.Nil(t, err)
-	return e
-}
-
-func requireNewEmptyEvent(t *T) Event {
-	e := requireNewEvent(t)
-	e.Contents = ""
-	return e
-}
-
 func randKey(base string) Key {
 	return Key{
 		Base: base,
@@ -78,13 +64,13 @@ func randKey(base string) Key {
 	}
 }
 
-func populatedKey(t *T, base string, ee ...Event) Key {
+func populatedKey(t *T, base string, ii ...ID) Key {
 	k := randKey(base)
 	_, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
-				QuerySelector: &QuerySelector{Events: ee},
+				QuerySelector: &QuerySelector{IDs: ii},
 			},
 			{
 				QueryAddTo: &QueryAddTo{
@@ -97,23 +83,23 @@ func populatedKey(t *T, base string, ee ...Event) Key {
 	return k
 }
 
-func randPopulatedKey(t *T, base string, size int) (Key, []Event) {
-	ee := make([]Event, size)
-	for i := range ee {
-		ee[i] = requireNewEmptyEvent(t)
+func randPopulatedKey(t *T, base string, size int) (Key, []ID) {
+	ii := make([]ID, size)
+	for i := range ii {
+		ii[i] = requireNewID(t)
 	}
-	k := populatedKey(t, base, ee...)
-	return k, ee
+	k := populatedKey(t, base, ii...)
+	return k, ii
 }
 
-func assertKey(t *T, k Key, ee ...Event) {
-	ee2, err := testCore.Query(QueryActions{
+func assertKey(t *T, k Key, ii ...ID) {
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
 							Min: 0,
 							Max: 0,
@@ -124,28 +110,28 @@ func assertKey(t *T, k Key, ee ...Event) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, ee, ee2)
+	assert.Equal(t, ii, ii2)
 }
 
-// Assert the contents of an eventset as well as their scores
-func assertKeyRaw(t *T, k Key, exm map[Event]int64) {
+// Assert the contents of a set as well as its scores
+func assertKeyRaw(t *T, k Key, ixm map[ID]int64) {
 	arr, err := testCore.Cmd("ZRANGE", k.String(testCore.o.RedisPrefix), 0, -1, "WITHSCORES").Array()
 	require.Nil(t, err)
 
-	m := map[Event]int64{}
+	m := map[ID]int64{}
 	for i := 0; i < len(arr); i += 2 {
-		eb, err := arr[i].Bytes()
+		ib, err := arr[i].Bytes()
 		require.Nil(t, err)
 		score, err := arr[i+1].Int64()
 		require.Nil(t, err)
 
-		var e Event
-		_, err = e.UnmarshalMsg(eb)
+		var id ID
+		_, err = id.UnmarshalMsg(ib)
 		require.Nil(t, err)
 
-		m[e] = score
+		m[id] = score
 	}
-	assert.Equal(t, exm, m)
+	assert.Equal(t, ixm, m)
 }
 
 func TestGetSetEvent(t *T) {
@@ -179,12 +165,10 @@ func TestKeyString(t *T) {
 	}
 }
 
-// Tests AddTo/RemoveFrom, as well as infinite Min/Max in QueryEventRangeSelect,
-// and Events in QuerySelect
 func TestQueryBasicAddRemove(t *T) {
 	base := testutil.RandStr()
-	k, ee := randPopulatedKey(t, base, 3)
-	assertKey(t, k, ee...)
+	k, ii := randPopulatedKey(t, base, 3)
+	assertKey(t, k, ii...)
 
 	_, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
@@ -192,8 +176,8 @@ func TestQueryBasicAddRemove(t *T) {
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					Events: []Event{
-						ee[1],
+					IDs: []ID{
+						ii[1],
 					},
 				},
 			},
@@ -203,7 +187,7 @@ func TestQueryBasicAddRemove(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assertKey(t, k, ee[0], ee[2])
+	assertKey(t, k, ii[0], ii[2])
 }
 
 func TestQueryAddScores(t *T) {
@@ -211,20 +195,20 @@ func TestQueryAddScores(t *T) {
 	k1 := randKey(base)
 	k2 := randKey(base)
 	k3 := randKey(base)
-	ee := []Event{
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
+	ii := []ID{
+		requireNewID(t),
+		requireNewID(t),
+		requireNewID(t),
+		requireNewID(t),
 	}
-	ee[1].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
-	ee[3].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ii[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ii[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: base,
 		QueryActions: []QueryAction{
 			{
-				QuerySelector: &QuerySelector{Events: ee},
+				QuerySelector: &QuerySelector{IDs: ii},
 			},
 			{
 				QueryAddTo: &QueryAddTo{
@@ -246,24 +230,24 @@ func TestQueryAddScores(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, ee, ee2)
-	assertKeyRaw(t, k1, map[Event]int64{
-		ee[0]: int64(ee[0].ID.T),
-		ee[1]: int64(ee[1].ID.T),
-		ee[2]: int64(ee[2].ID.T),
-		ee[3]: int64(ee[3].ID.T),
+	assert.Equal(t, ii, ii2)
+	assertKeyRaw(t, k1, map[ID]int64{
+		ii[0]: int64(ii[0].T),
+		ii[1]: int64(ii[1].T),
+		ii[2]: int64(ii[2].T),
+		ii[3]: int64(ii[3].T),
 	})
-	assertKeyRaw(t, k2, map[Event]int64{
-		ee[0]: int64(ee[0].ID.Expire),
-		ee[1]: int64(ee[1].ID.Expire),
-		ee[2]: int64(ee[2].ID.Expire),
-		ee[3]: int64(ee[3].ID.Expire),
+	assertKeyRaw(t, k2, map[ID]int64{
+		ii[0]: int64(ii[0].Expire),
+		ii[1]: int64(ii[1].Expire),
+		ii[2]: int64(ii[2].Expire),
+		ii[3]: int64(ii[3].Expire),
 	})
-	assertKeyRaw(t, k3, map[Event]int64{
-		ee[0]: 5,
-		ee[1]: 5,
-		ee[2]: 5,
-		ee[3]: 5,
+	assertKeyRaw(t, k3, map[ID]int64{
+		ii[0]: 5,
+		ii[1]: 5,
+		ii[2]: 5,
+		ii[3]: 5,
 	})
 }
 
@@ -271,14 +255,14 @@ func TestQueryRemoveByScore(t *T) {
 	// This test is not very strict, most of the funtionality here comes form
 	// QueryScoreRange, which is tested in TestQueryRangeSelect extensively
 	base := testutil.RandStr()
-	k, ee := randPopulatedKey(t, base, 4)
-	ee2, err := testCore.Query(QueryActions{
+	k, ii := randPopulatedKey(t, base, 4)
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QueryRemoveByScore: &QueryRemoveByScore{
 					QueryScoreRange: QueryScoreRange{
-						Max:     TS(ee[2].ID.T),
+						Max:     ii[2].T,
 						MaxExcl: true,
 					},
 					Keys: []Key{k},
@@ -287,26 +271,24 @@ func TestQueryRemoveByScore(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Empty(t, ee2)
-	assertKey(t, k, ee[2], ee[3])
+	assert.Empty(t, ii2)
+	assertKey(t, k, ii[2], ii[3])
 }
 
-// Tests normal Min/Max, MinExcl and MaxExcl, Limit/Offset, and
-// MinFromInput/MaxFromInput in QueryEventRangeSelect
 func TestQueryRangeSelect(t *T) {
 	base := testutil.RandStr()
-	k, ee := randPopulatedKey(t, base, 4)
+	k, ii := randPopulatedKey(t, base, 4)
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min: ee[1].ID.T,
-							Max: ee[2].ID.T,
+							Min: ii[1].T,
+							Max: ii[2].T,
 						},
 					},
 				},
@@ -314,19 +296,19 @@ func TestQueryRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[1], ii[2]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min:     ee[0].ID.T,
+							Min:     ii[0].T,
 							MinExcl: true,
-							Max:     ee[3].ID.T,
+							Max:     ii[3].T,
 							MaxExcl: true,
 						},
 					},
@@ -335,18 +317,18 @@ func TestQueryRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[1], ii[2]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min: ee[0].ID.T,
-							Max: ee[3].ID.T,
+							Min: ii[0].T,
+							Max: ii[3].T,
 						},
 						Offset: 1,
 						Limit:  2,
@@ -356,18 +338,18 @@ func TestQueryRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[1], ii[2]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
-							Min: TS(ee[1].ID.T),
-							Max: TS(ee[2].ID.T),
+							Min: TS(ii[1].T),
+							Max: TS(ii[2].T),
 						},
 						Reverse: true,
 						Limit:   1,
@@ -377,23 +359,23 @@ func TestQueryRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[2]}, ii2)
 
-	minK := populatedKey(t, base, ee[0], ee[1])
-	maxK := populatedKey(t, base, ee[2], ee[3])
-	ee2, err = testCore.Query(QueryActions{
+	minK := populatedKey(t, base, ii[0], ii[1])
+	maxK := populatedKey(t, base, ii[2], ii[3])
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key: minK,
-					QueryEventRangeSelect: &QueryEventRangeSelect{},
+					Key:              minK,
+					QueryRangeSelect: &QueryRangeSelect{},
 				},
 			},
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
 							MinFromInput: true,
 						},
@@ -403,21 +385,21 @@ func TestQueryRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2], ee[3]}, ee2)
+	assert.Equal(t, []ID{ii[1], ii[2], ii[3]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key: maxK,
-					QueryEventRangeSelect: &QueryEventRangeSelect{},
+					Key:              maxK,
+					QueryRangeSelect: &QueryRangeSelect{},
 				},
 			},
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventRangeSelect: &QueryEventRangeSelect{
+					QueryRangeSelect: &QueryRangeSelect{
 						QueryScoreRange: QueryScoreRange{
 							MaxFromInput: true,
 						},
@@ -427,70 +409,70 @@ func TestQueryRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[0], ee[1], ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[0], ii[1], ii[2]}, ii2)
 }
 
-func TestQueryEventScoreSelect(t *T) {
+func TestQueryIDScoreSelect(t *T) {
 	base := testutil.RandStr()
-	k, ee := randPopulatedKey(t, base, 1)
+	k, ii := randPopulatedKey(t, base, 1)
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventScoreSelect: &QueryEventScoreSelect{
-						Event: ee[0],
+					QueryIDScoreSelect: &QueryIDScoreSelect{
+						ID: ii[0],
 					},
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[0]}, ee2)
+	assert.Equal(t, []ID{ii[0]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventScoreSelect: &QueryEventScoreSelect{
-						Event: ee[0],
-						Equal: TS(ee[0].ID.T),
+					QueryIDScoreSelect: &QueryIDScoreSelect{
+						ID:    ii[0],
+						Equal: ii[0].T,
 					},
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[0]}, ee2)
+	assert.Equal(t, []ID{ii[0]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
 					Key: k,
-					QueryEventScoreSelect: &QueryEventScoreSelect{
-						Event: ee[0],
-						Min:   TS(ee[0].ID.T) + 10,
+					QueryIDScoreSelect: &QueryIDScoreSelect{
+						ID:  ii[0],
+						Min: ii[0].T + 10,
 					},
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Empty(t, ee2)
+	assert.Empty(t, ii2)
 }
 
 // Tests PosRangeSelect
 func TestQueryPosRangeSelect(t *T) {
 	base := testutil.RandStr()
-	k, ee := randPopulatedKey(t, base, 4)
+	k, ii := randPopulatedKey(t, base, 4)
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
@@ -502,28 +484,28 @@ func TestQueryPosRangeSelect(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[1], ii[2]}, ii2)
 }
 
-// Tests that expired events don't get returned when filtered. Also tests Invert
+// Tests that expired IDs don't get returned when filtered. Also tests Invert
 func TestQueryFiltering(t *T) {
 	k := randKey(testutil.RandStr())
-	ee := []Event{
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
+	ii := []ID{
+		requireNewID(t),
+		requireNewID(t),
+		requireNewID(t),
+		requireNewID(t),
 	}
-	ee[1].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
-	ee[3].ID.Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ii[1].Expire = NewTS(time.Now().Add(-1 * time.Second))
+	ii[3].Expire = NewTS(time.Now().Add(-1 * time.Second))
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: ee,
+					Key: k,
+					IDs: ii,
 				},
 			},
 			{
@@ -534,15 +516,15 @@ func TestQueryFiltering(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[0], ee[2]}, ee2)
+	assert.Equal(t, []ID{ii[0], ii[2]}, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: ee,
+					Key: k,
+					IDs: ii,
 				},
 			},
 			{
@@ -554,130 +536,129 @@ func TestQueryFiltering(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{ee[1], ee[3]}, ee2)
+	assert.Equal(t, []ID{ii[1], ii[3]}, ii2)
 }
 
-// Tests Events in QuerySelect
-func TestQueryEvents(t *T) {
+func TestQueryIDs(t *T) {
 	base := testutil.RandStr()
 	k := randKey(base)
 
-	ee := []Event{
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
+	ii := []ID{
+		requireNewID(t),
+		requireNewID(t),
+		requireNewID(t),
 	}
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: ee,
+					Key: k,
+					IDs: ii,
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, ee, ee2)
+	assert.Equal(t, ii, ii2)
 }
 
 // Tests that an empty query result set doesn't fuck with decoding
 func TestQueryEmpty(t *T) {
 	base := testutil.RandStr()
 	k := randKey(base)
-	ee, err := testCore.Query(QueryActions{
+	ii, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: []Event{},
+					Key: k,
+					IDs: []ID{},
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, []Event{}, ee)
+	assert.Equal(t, []ID{}, ii)
 }
 
 func TestQueryUnion(t *T) {
 	base := testutil.RandStr()
 	k := randKey(base)
 
-	eeA := []Event{
-		requireNewEmptyEvent(t),
-		requireNewEmptyEvent(t),
+	iiA := []ID{
+		requireNewID(t),
+		requireNewID(t),
 	}
-	eeB := []Event{
-		eeA[0],
-		requireNewEmptyEvent(t),
+	iiB := []ID{
+		iiA[0],
+		requireNewID(t),
 	}
-	eeU := []Event{
-		eeA[0],
-		eeA[1],
-		eeB[1],
+	iiU := []ID{
+		iiA[0],
+		iiA[1],
+		iiB[1],
 	}
-	assert.True(t, eeU[0].ID.T < eeU[1].ID.T)
-	assert.True(t, eeU[1].ID.T < eeU[2].ID.T)
+	assert.True(t, iiU[0].T < iiU[1].T)
+	assert.True(t, iiU[1].T < iiU[2].T)
 
 	// First test that previous output is overwritten without Union
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeA,
+					Key: k,
+					IDs: iiA,
 				},
 			},
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeB,
+					Key: k,
+					IDs: iiB,
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, eeB, ee2)
+	assert.Equal(t, iiB, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeA,
+					Key: k,
+					IDs: iiA,
 				},
 			},
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeB,
+					Key: k,
+					IDs: iiB,
 				},
 				Union: true,
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, eeU, ee2)
+	assert.Equal(t, iiU, ii2)
 }
 
 func TestQueryBreak(t *T) {
 	base := testutil.RandStr()
 	k := randKey(base)
-	eeA := []Event{requireNewEmptyEvent(t)}
-	eeB := []Event{requireNewEmptyEvent(t)}
+	iiA := []ID{requireNewID(t)}
+	iiB := []ID{requireNewID(t)}
 
-	ee2, err := testCore.Query(QueryActions{
+	ii2, err := testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeA,
+					Key: k,
+					IDs: iiA,
 				},
 			},
 			{
@@ -685,22 +666,22 @@ func TestQueryBreak(t *T) {
 			},
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeB,
+					Key: k,
+					IDs: iiB,
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, eeA, ee2)
+	assert.Equal(t, iiA, ii2)
 
-	ee2, err = testCore.Query(QueryActions{
+	ii2, err = testCore.Query(QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeA,
+					Key: k,
+					IDs: iiA,
 				},
 			},
 			{
@@ -709,28 +690,28 @@ func TestQueryBreak(t *T) {
 			},
 			{
 				QuerySelector: &QuerySelector{
-					Key:    k,
-					Events: eeB,
+					Key: k,
+					IDs: iiB,
 				},
 			},
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, eeB, ee2)
+	assert.Equal(t, iiB, ii2)
 }
 
 func TestQueryConditionals(t *T) {
 	base := testutil.RandStr()
 	keyFull, _ := randPopulatedKey(t, base, 5)
 	keyEmpty := randKey(base)
-	e := requireNewEmptyEvent(t)
+	id := requireNewID(t)
 
-	ee, err := testCore.Query(QueryActions{
+	ii, err := testCore.Query(QueryActions{
 		KeyBase: base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Events: []Event{e},
+					IDs: []ID{id},
 				},
 				QueryConditional: QueryConditional{
 					IfEmpty: &keyEmpty,
@@ -739,14 +720,14 @@ func TestQueryConditionals(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, e, ee[0])
+	assert.Equal(t, id, ii[0])
 
-	ee, err = testCore.Query(QueryActions{
+	ii, err = testCore.Query(QueryActions{
 		KeyBase: base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Events: []Event{e},
+					IDs: []ID{id},
 				},
 				QueryConditional: QueryConditional{
 					IfEmpty: &keyFull,
@@ -755,14 +736,14 @@ func TestQueryConditionals(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Empty(t, ee)
+	assert.Empty(t, ii)
 
-	ee, err = testCore.Query(QueryActions{
+	ii, err = testCore.Query(QueryActions{
 		KeyBase: base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Events: []Event{e},
+					IDs: []ID{id},
 				},
 				QueryConditional: QueryConditional{
 					And: []QueryConditional{
@@ -778,14 +759,14 @@ func TestQueryConditionals(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, e, ee[0])
+	assert.Equal(t, id, ii[0])
 
-	ee, err = testCore.Query(QueryActions{
+	ii, err = testCore.Query(QueryActions{
 		KeyBase: base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Events: []Event{e},
+					IDs: []ID{id},
 				},
 				QueryConditional: QueryConditional{
 					And: []QueryConditional{
@@ -801,12 +782,12 @@ func TestQueryConditionals(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Empty(t, ee)
+	assert.Empty(t, ii)
 }
 
 func TestSetCounts(t *T) {
 	base := testutil.RandStr()
-	k1, ee1 := randPopulatedKey(t, base, 5)
+	k1, ii1 := randPopulatedKey(t, base, 5)
 	k2, _ := randPopulatedKey(t, base, 1)
 
 	qsr := QueryScoreRange{}
@@ -814,7 +795,7 @@ func TestSetCounts(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{0, 5, 0, 1}, counts)
 
-	qsr.Min = ee1[0].ID.T
+	qsr.Min = ii1[0].T
 	counts, err = testCore.SetCounts(qsr, k1, k2)
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{5, 1}, counts)
@@ -824,7 +805,7 @@ func TestSetCounts(t *T) {
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{4, 1}, counts)
 
-	qsr.Max = ee1[4].ID.T
+	qsr.Max = ii1[4].T
 	counts, err = testCore.SetCounts(qsr, k1, k2)
 	require.Nil(t, err)
 	assert.Equal(t, []uint64{4, 0}, counts)
@@ -859,15 +840,15 @@ func TestKeyScan(t *T) {
 
 func TestSingleGetSet(t *T) {
 	key := randKey(testutil.RandStr())
-	e := requireNewEmptyEvent(t)
+	id := requireNewID(t)
 
-	// Setting returns the event
-	ee, err := testCore.Query(QueryActions{
+	// Setting returns the ID
+	ii, err := testCore.Query(QueryActions{
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Events: []Event{e},
+					IDs: []ID{id},
 				},
 			},
 			{
@@ -878,10 +859,10 @@ func TestSingleGetSet(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, e, ee[0])
+	assert.Equal(t, id, ii[0])
 
-	// Getting a set event returns it
-	ee, err = testCore.Query(QueryActions{
+	// Getting a set ID returns it
+	ii, err = testCore.Query(QueryActions{
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{
@@ -890,11 +871,11 @@ func TestSingleGetSet(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, e, ee[0])
+	assert.Equal(t, id, ii[0])
 
-	// Getting a set event after the expire doesn't return it
-	ee, err = testCore.Query(QueryActions{
-		Now:     (e.ID.Expire + 1).Time(),
+	// Getting a set ID after the expire doesn't return it
+	ii, err = testCore.Query(QueryActions{
+		Now:     (id.Expire + 1).Time(),
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{
@@ -903,17 +884,17 @@ func TestSingleGetSet(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Empty(t, ee)
+	assert.Empty(t, ii)
 
-	// Trying to put an older event with IfNewer results in no change
-	e2 := e
-	e2.ID.T -= 5
-	ee, err = testCore.Query(QueryActions{
+	// Trying to put an older ID with IfNewer results in no change
+	id2 := id
+	id2.T -= 5
+	ii, err = testCore.Query(QueryActions{
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{
 				QuerySelector: &QuerySelector{
-					Events: []Event{e2},
+					IDs: []ID{id2},
 				},
 			},
 			{
@@ -925,9 +906,9 @@ func TestSingleGetSet(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, e2, ee[0])
+	assert.Equal(t, id2, ii[0])
 
-	ee, err = testCore.Query(QueryActions{
+	ii, err = testCore.Query(QueryActions{
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{
@@ -936,5 +917,5 @@ func TestSingleGetSet(t *T) {
 		},
 	})
 	require.Nil(t, err)
-	assert.Equal(t, e, ee[0])
+	assert.Equal(t, id, ii[0])
 }

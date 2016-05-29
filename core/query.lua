@@ -14,20 +14,22 @@ local function keyString(k)
     return str
 end
 
-local function expandEvent(e)
-    local ee
-    if e.ID and e.packed then
-        ee = e
-    elseif e.ID then
-        e.packed = cmsgpack.pack(e)
-        ee = e
+local function expandID(id)
+    local idout
+    if type(id) == "string" then
+        idout = cmsgpack.unpack(id)
+        idout.packed = id
+    elseif id.T and id.packed then
+        idout = id
+    elseif id.T then
+        id.packed = cmsgpack.pack(id)
+        idout = id
     else
-        ee = cmsgpack.unpack(e)
-        ee.packed = e
+        error("can't expand broke ass id value")
     end
 
-    ee.Contents = nil
-    return ee
+    idout.Contents = nil
+    return idout
 end
 
 local function formatQEMinMax(m, excl, inf)
@@ -45,12 +47,12 @@ end
 -- and the string to use as max
 local function query_score_range(input, qsr)
     if qsr.MinFromInput then
-        if #input > 0 then qsr.Min = input[#input].ID.T else qsr.Min = 0 end
+        if #input > 0 then qsr.Min = input[#input].T else qsr.Min = 0 end
     end
     local min = formatQEMinMax(qsr.Min, qsr.MinExcl, "-inf")
 
     if qsr.MaxFromInput then
-        if #input > 0 then qsr.Max = input[1].ID.T else qsr.Max = 0 end
+        if #input > 0 then qsr.Max = input[1].T else qsr.Max = 0 end
     end
     local max = formatQEMinMax(qsr.Max, qsr.MaxExcl, "+inf")
     return min, max
@@ -64,43 +66,43 @@ local query_select
 -- by query_select
 local function query_select_inner(input, qs)
     local key = keyString(qs.Key)
-    if qs.QueryEventRangeSelect then
-        local qe = qs.QueryEventRangeSelect
-        local min, max = query_score_range(input, qe.QueryScoreRange)
+    if qs.QueryRangeSelect then
+        local qsr = qs.QueryRangeSelect
+        local min, max = query_score_range(input, qsr.QueryScoreRange)
 
         local zrangebyscore = "ZRANGEBYSCORE"
-        if qe.Reverse then
+        if qsr.Reverse then
             zrangebyscore = "ZREVRANGEBYSCORE"
             min, max = max, min
         end
 
         local ret
-        if qe.Limit ~= 0 then
-            ret = redis.call(zrangebyscore, key, min, max, "LIMIT", qe.Offset, qe.Limit)
+        if qsr.Limit ~= 0 then
+            ret = redis.call(zrangebyscore, key, min, max, "LIMIT", qsr.Offset, qsr.Limit)
         else
             ret = redis.call(zrangebyscore, key, min, max)
         end
         --debug({ret=ret, esKey=esKey, cmd=zrangebyscore, min=min, max=max})
         return ret
 
-    elseif qs.QueryEventScoreSelect then
-        local qes = qs.QueryEventScoreSelect
-        local e = expandEvent(qes.Event)
-        local scoreRaw = redis.call("ZSCORE", key, e.packed)
+    elseif qs.QueryIDScoreSelect then
+        local qiss = qs.QueryIDScoreSelect
+        local id = expandID(qiss.ID)
+        local scoreRaw = redis.call("ZSCORE", key, id.packed)
         if not scoreRaw then return {} end
         local score = tonumber(scoreRaw)
 
-        if score < qes.Min then return {} end
-        if qes.Max > 0 and score > qes.Max then return {} end
-        if qes.Equal > 0 and score ~= qes.Equal then return {} end
-        return {e}
+        if score < qiss.Min then return {} end
+        if qiss.Max > 0 and score > qiss.Max then return {} end
+        if qiss.Equal > 0 and score ~= qiss.Equal then return {} end
+        return {id}
 
     elseif #qs.PosRangeSelect > 0 then
         local pr = qs.PosRangeSelect
         return redis.call("ZRANGE", key, pr[1], pr[2])
 
-    elseif qs.Events then
-        return qs.Events
+    elseif qs.IDs then
+        return qs.IDs
     end
 end
 
@@ -109,7 +111,7 @@ end
 query_select = function(input, qs)
     local output = query_select_inner(input, qs)
     for i = 1,#output do
-        output[i] = expandEvent(output[i])
+        output[i] = expandID(output[i])
     end
     return output
 end
@@ -117,14 +119,14 @@ end
 local function query_filter(input, qf)
     local output = {}
     for i = 1, #input do
-        local e = input[i]
+        local id = input[i]
         local filter
         if qf.Expired then
-            filter = e.ID.Expire <= nowTS
+            filter = id.Expire <= nowTS
         end
         -- ~= is not equals, which is synonomous with xor
         filter = filter ~= qf.Invert
-        if not filter then table.insert(output, e) end
+        if not filter then table.insert(output, id) end
     end
     return output
 end
@@ -163,8 +165,8 @@ local function query_action(input, qa)
         for i = 1, #qa.QueryAddTo.Keys do
             local key = keyString(qa.QueryAddTo.Keys[i])
             for i = 1, #input do
-                local score = input[i].ID.T
-                if qa.QueryAddTo.ExpireAsScore then score = input[i].ID.Expire end
+                local score = input[i].T
+                if qa.QueryAddTo.ExpireAsScore then score = input[i].Expire end
                 if qa.QueryAddTo.Score > 0 then score = qa.QueryAddTo.Score end
                 redis.call("ZADD", key, score, input[i].packed)
             end
@@ -197,16 +199,16 @@ local function query_action(input, qa)
         local key = keyString(qss.Key)
         if #input > 0 then
             if qss.IfNewer then
-                local olde = redis.call("GET", key)
-                if olde then
-                    olde = expandEvent(olde)
-                    if olde.ID.T > input[1].ID.T then
+                local oldi = redis.call("GET", key)
+                if oldi then
+                    oldi = expandID(oldi)
+                    if oldi.T > input[1].T then
                         return input, false
                     end
                 end
             end
 
-            local exp = math.floor(input[1].ID.Expire / 1000) -- to milliseconds
+            local exp = math.floor(input[1].Expire / 1000) -- to milliseconds
             exp = exp + 1 -- add one for funsies
             redis.call("SET", key, input[1].packed)
             redis.call("PEXPIREAT", key, exp)
@@ -216,11 +218,11 @@ local function query_action(input, qa)
 
     if qa.SingleGet then
         local key = keyString(qa.SingleGet)
-        local e = redis.call("GET", key)
-        if not e then return {}, false end
-        e = expandEvent(e)
-        if e.ID.Expire < nowTS then return {}, false end
-        return {e}, false
+        local id = redis.call("GET", key)
+        if not id then return {}, false end
+        id = expandID(id)
+        if id.Expire < nowTS then return {}, false end
+        return {id}, false
     end
 
     if qa.QueryFilter then return query_filter(input, qa.QueryFilter), false end
@@ -229,51 +231,51 @@ local function query_action(input, qa)
     return input, false
 end
 
-local function sort_events(ee)
+local function sort_ids(ii)
     local ids = {}
     local byid = {}
-    for i = 1, #ee do
-        table.insert(ids, ee[i].ID.T)
-        byid[ee[i].ID.T] = ee[i]
+    for i = 1, #ii do
+        table.insert(ids, ii[i].T)
+        byid[ii[i].T] = ii[i]
     end
     table.sort(ids)
-    local sorted_ee = {}
+    local sorted_ii = {}
     for i = 1, #ids do
-        table.insert(sorted_ee, byid[ids[i]])
+        table.insert(sorted_ii, byid[ids[i]])
     end
-    return sorted_ee
+    return sorted_ii
 end
 
 local qas = cmsgpack.unpack(ARGV[2])
-local ee = {}
+local ii = {}
 for i = 1,#qas.QueryActions do
     local qa = qas.QueryActions[i]
-    local newee, skipped = query_action(ee, qa)
+    local newii, skipped = query_action(ii, qa)
     if not skipped and qas.QueryActions[i].Break then break end
 
     if qa.Union then
         local set = {}
-        for i = 1,#ee do
-            set[ee[i].ID.T] = ee[i]
+        for i = 1,#ii do
+            set[ii[i].T] = ii[i]
         end
-        for i = 1,#newee do
-            set[newee[i].ID.T] = newee[i]
+        for i = 1,#newii do
+            set[newii[i].T] = newii[i]
         end
 
-        newee = {}
+        newii = {}
         for _, e in pairs(set) do
-            table.insert(newee, e)
+            table.insert(newii, e)
         end
     end
 
-    -- We always sort the output by ID.T. It kind of sucks, but there's no way of
-    -- knowing that the events were stored ordered by ID.T versus something else,
-    -- and for Union we have to do it anyway
-    ee = sort_events(newee)
+    -- We always sort the output by T. It kind of sucks, but there's no way of
+    -- knowing that the ids were stored ordered by T versus something else, and
+    -- for Union we have to do it anyway
+    ii = sort_ids(newii)
 end
 
-for i = 1,#ee do
-    ee[i].packed = nil
+for i = 1,#ii do
+    ii[i].packed = nil
 end
 
-return cmsgpack.pack({Events = ee})
+return cmsgpack.pack({IDs = ii})

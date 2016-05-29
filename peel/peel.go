@@ -114,8 +114,8 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		QueryActions: []core.QueryAction{
 			{
 				QuerySelector: &core.QuerySelector{
-					Key:    keyAvailID,
-					Events: []core.Event{e},
+					Key: keyAvailID,
+					IDs: []core.ID{e.ID},
 				},
 			},
 			{
@@ -242,7 +242,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	}
 
 	var qq []core.QueryAction
-	// First, if there's any Events in redo, we grab the first one from there
+	// First, if there's any IDs in redo, we grab the first one from there
 	// and move it to inProg/done
 	qq = append(qq,
 		core.QueryAction{
@@ -258,7 +258,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq, inProgOrDone...)
 	qq = append(qq, breakIfFound)
 
-	// Otherwise, we grab the most recent Events from both inProgByID and done
+	// Otherwise, we grab the most recent IDs from both inProgByID and done
 	qq = append(qq,
 		core.QueryAction{
 			SingleGet: &keyPtr,
@@ -267,7 +267,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		core.QueryAction{
 			QuerySelector: &core.QuerySelector{
 				Key: keyAvailID,
-				QueryEventRangeSelect: &core.QueryEventRangeSelect{
+				QueryRangeSelect: &core.QueryRangeSelect{
 					QueryScoreRange: core.QueryScoreRange{
 						MinFromInput: true,
 						MinExcl:      true,
@@ -310,14 +310,14 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		Now:          now,
 	}
 
-	ee, err := p.c.Query(qa)
+	ii, err := p.c.Query(qa)
 	if err != nil {
 		return core.Event{}, err
-	} else if len(ee) == 0 {
+	} else if len(ii) == 0 {
 		return core.Event{}, nil
 	}
 
-	return p.c.GetEvent(ee[0].ID)
+	return p.c.GetEvent(ii[0])
 }
 
 // QAckCommand describes the parameters which can be passed into the QAck
@@ -345,9 +345,9 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 			{
 				QuerySelector: &core.QuerySelector{
 					Key: keyInProgAck,
-					QueryEventScoreSelect: &core.QueryEventScoreSelect{
-						Event: core.Event{ID: c.EventID},
-						Min:   core.NewTS(now),
+					QueryIDScoreSelect: &core.QueryIDScoreSelect{
+						ID:  c.EventID,
+						Min: core.NewTS(now),
 					},
 				},
 			},
@@ -370,11 +370,11 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 		Now: now,
 	}
 
-	ee, err := p.c.Query(qa)
+	ii, err := p.c.Query(qa)
 	if err != nil {
 		return false, err
 	}
-	return len(ee) > 0, nil
+	return len(ii) > 0, nil
 }
 
 // TODO maybe peel should just do the cleaning automatically?
@@ -402,7 +402,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 			{
 				QuerySelector: &core.QuerySelector{
 					Key: keyInProgAck,
-					QueryEventRangeSelect: &core.QueryEventRangeSelect{
+					QueryRangeSelect: &core.QueryRangeSelect{
 						QueryScoreRange: qsr,
 					},
 				},
@@ -421,7 +421,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 			{
 				QuerySelector: &core.QuerySelector{
 					Key: keyInUse,
-					QueryEventRangeSelect: &core.QueryEventRangeSelect{
+					QueryRangeSelect: &core.QueryRangeSelect{
 						QueryScoreRange: qsr,
 					},
 				},
@@ -455,7 +455,7 @@ func (p Peel) CleanAvailable(queue string) error {
 			{
 				QuerySelector: &core.QuerySelector{
 					Key: keyAvailEx,
-					QueryEventRangeSelect: &core.QueryEventRangeSelect{
+					QueryRangeSelect: &core.QueryRangeSelect{
 						QueryScoreRange: core.QueryScoreRange{
 							Max: nowTS,
 						},

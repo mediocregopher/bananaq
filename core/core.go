@@ -221,6 +221,12 @@ func IDFromString(idstr string) (ID, error) {
 	return ID{T: TS(tI), Expire: TS(expireI)}, nil
 }
 
+// IDs is a wrapper around a slice of ID structs, useful for MessagePack
+// encoding/decoding
+type IDs struct {
+	IDs []ID
+}
+
 // Event describes all the information related to a single event. An event is
 // immutable, nothing in this struct will ever change
 type Event struct {
@@ -231,6 +237,7 @@ type Event struct {
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
 func (c *Core) NewEvent(now, expire TS, contents string) (Event, error) {
+	// TODO docs for this method could be better
 	nowMono, err := c.MonoTS(now)
 	if err != nil {
 		return Event{}, err
@@ -269,7 +276,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	return err
 }
 
-// GetEvent returns the event identified by the given id, or ErrNotFound if it's
+// GetEvent returns the event identified by the given ID, or ErrNotFound if it's
 // expired or never existed
 func (c *Core) GetEvent(id ID) (Event, error) {
 	k := Key{Base: id.String(), Subs: []string{"event"}}
@@ -286,12 +293,6 @@ func (c *Core) GetEvent(id ID) (Event, error) {
 	var e Event
 	_, err = e.UnmarshalMsg(eb)
 	return e, err
-}
-
-// Events is a wrapper around a slice of Event structs, useful for MessagePack
-// encoding/decoding
-type Events struct {
-	Events []Event
 }
 
 // Key describes a location some data can be stored in in redis. Keys with the
@@ -331,7 +332,7 @@ func KeyFromString(key string) Key {
 // wherein I develop what amounts to a DSL for working with multiple Key's
 // contents transactionally
 
-// QueryScoreRange is used by multiple selectors to describe a range of Events
+// QueryScoreRange is used by multiple selectors to describe a range of elements
 // by their scores. If MinExcl is true, Min itself will be excluded from the
 // return if it's in the set (and similarly for MaxExcl/Max). If Min or Max are
 // 0 that indicates -infinity or +infinity, respectively
@@ -363,62 +364,62 @@ func (qsr QueryScoreRange) minmax() (string, string) {
 	return mm(qsr.Min, qsr.MinExcl, "-inf"), mm(qsr.Max, qsr.MaxExcl, "+inf")
 }
 
-// QueryEventRangeSelect is used to select all Events within the given range
-// from a Key.
-type QueryEventRangeSelect struct {
+// QueryRangeSelect is used to select all elements within the given range from a
+// Key.
+type QueryRangeSelect struct {
 	QueryScoreRange
 
 	// Optional modifiers. If Offset is nonzero, Limit must be nonzero too (it
 	// can be -1 to indicate no limit)
 	Limit, Offset int64
 
-	// If true, reverses the order that events in the set are processed and
+	// If true, reverses the order that IDs in the set are processed and
 	// returned. The meanings of Min/Max stay the same though.
 	Reverse bool
 }
 
-// QueryEventScoreSelect pulls the given Event from a Key. If the Event is not
-// in the Key there is no output. If the Event is in the Key but its score does
+// QueryIDScoreSelect pulls the given ID from a Key. If the ID is not
+// in the Key there is no output. If the ID is in the Key but its score does
 // not match whatever conditions are set by Min/Max/Equal there is no output.
-// Otherwise the output is the single Event.
-type QueryEventScoreSelect struct {
-	Event Event
+// Otherwise the output is the single ID.
+type QueryIDScoreSelect struct {
+	ID    ID
 	Min   TS
 	Max   TS
 	Equal TS
 }
 
-// QuerySelector describes a set of criteria for selecting a set of Events from
-// a Key. Key is a required field, only one field apart from it should be set in
+// QuerySelector describes a set of criteria for selecting a set of IDs from a
+// Key. Key is a required field, only one field apart from it should be set in
 // this selector (unless otherwise noted)
 type QuerySelector struct {
 	Key
 
-	// See QueryEventRangeSelect doc string
-	*QueryEventRangeSelect
+	// See QueryRangeSelect doc string
+	*QueryRangeSelect
 
-	// See QueryEventScoreSelect doc string
-	*QueryEventScoreSelect
+	// See QueryIDScoreSelect doc string
+	*QueryIDScoreSelect
 
-	// Select Events by their position within the Key, using a two element
+	// Select IDs by their position within the Key, using a two element
 	// slice. 0 is the oldest id, 1 is the second oldest, etc... -1 is the
 	// youngest, -2 the second youngest, etc...
 	PosRangeSelect []int64
 
 	// Doesn't actually do a query, the output from this selector will simply be
-	// these events.
-	Events []Event
+	// these IDs.
+	IDs []ID
 }
 
-// QueryFilter will apply a filter to its input, only outputting the Events
+// QueryFilter will apply a filter to its input, only outputting the IDs
 // which don't match the filter. Only one filter field should be set per
 // QueryAction
 type QueryFilter struct {
-	// If set, only Events which have not expired will be allowed through
+	// If set, only IDs which have not expired will be allowed through
 	Expired bool
 
 	// May be set alongside any other filter field. Will invert the filter, so
-	// that whatever Events would have been allowed through will not be, and
+	// that whatever IDs would have been allowed through will not be, and
 	// vice-versa
 	Invert bool
 }
@@ -439,26 +440,24 @@ type QueryConditional struct {
 	// empty input through
 	IfInput bool
 
-	// Only do the QueryAction if the given Key has no events in it. May be a
-	// set or a SingleKey
+	// Only do the QueryAction if the given Key has no data in it
 	IfEmpty *Key
 
-	// Only do the QueryAction if the given Key has one or more events in it.
-	// May be a set or a SingleKey
+	// Only do the QueryAction if the given Key has data in it
 	IfNotEmpty *Key
 }
 
-// QueryAddTo adds its input Events to the given Keys. If ExpireAsScore is set
-// to true, then each Event's expire time will be used as its score. If Score is
-// given it will be used as the score for all Events being added, otherwise the
-// ID of each individual Event will be used
+// QueryAddTo adds its input IDs to the given Keys. If ExpireAsScore is set to
+// true, then each ID's expire time will be used as its score. If Score is given
+// it will be used as the score for all IDs being added, otherwise the T of
+// each individual ID will be used
 type QueryAddTo struct {
 	Keys          []Key
 	ExpireAsScore bool
 	Score         TS
 }
 
-// QueryRemoveByScore is used to remove Events from Keys based on a range of
+// QueryRemoveByScore is used to remove IDs from Keys based on a range of
 // scores. This action does not change the input in anyway, it simply passes the
 // input through as its output.
 type QueryRemoveByScore struct {
@@ -466,43 +465,42 @@ type QueryRemoveByScore struct {
 	QueryScoreRange
 }
 
-// QuerySingleSet will set the given Key to the first Event in the input. If the
-// input to this action has no events then nothing happens.  The output from
-// this action will be the input. The expire on the Event will be used to expire
-// the key
+// QuerySingleSet will set the given Key to the first ID in the input. If the
+// input to this action has no IDs then nothing happens.  The output from this
+// action will be the input. The expire on the ID will be used to expire the key
 //
-// If IfNewer is set, the key will only be set if its ID is newer than the ID of
-// the event already in the Key. This does not change the output in any way
+// If IfNewer is set, the key will only be set if its ID is newer than the ID
+// already in the Key. This does not change the output in any way
 type QuerySingleSet struct {
 	Key
 	IfNewer bool
 }
 
-// QueryAction describes a single action to take on a set of events. Every
-// action has an input and an output, which are both always sorted
-// chronologically (by ID). Only one single field, apart from QueryConditional
-// or Union, should be set on a QueryAction.
+// QueryAction describes a single action to take on a set of IDs. Every action
+// has an input and an output, which are both always sorted chronologically (by
+// ID.T). Only one single field, apart from QueryConditional or Union, should be
+// set on a QueryAction.
 type QueryAction struct {
-	// Selects a set of Events using various types of logic. See the doc on
+	// Selects a set of IDs using various types of logic. See the doc on
 	// QuerySelector for more. By default, a QuerySelector causes this
 	// QueryAction to simply discard its input and output the QuerySelector's
 	// output.
 	*QuerySelector
 
-	// Adds the input Events to the given Keys. See its doc string for more info
+	// Adds the input IDs to the given Keys. See its doc string for more info
 	*QueryAddTo
 
-	// Removes Events from Keys by score. See its doc string for more info
+	// Removes IDs from Keys by score. See its doc string for more info
 	*QueryRemoveByScore
 
-	// Removes the input Events from the given Keys
+	// Removes the input IDs from the given Keys
 	RemoveFrom []Key
 
-	// Adds an Event to a key. See its doc string for more info
+	// Adds an ID to a key. See its doc string for more info
 	*QuerySingleSet
 
-	// Retrieve an Event that was set at the given Key using SingleSet. The
-	// output will be a set continaing only this Event, or empty output if the
+	// Retrieve an ID that was set at the given Key using SingleSet. The
+	// output will be a set continaing only this ID, or empty output if the
 	// key isn't set
 	SingleGet *Key
 
@@ -524,11 +522,11 @@ type QueryAction struct {
 }
 
 // QueryActions are a set of actions to take sequentially. A set of QueryActions
-// effectively amounts to a pipeline of Events. Each QueryAction has the
-// potential to output some set of Events, which become the input for the next
-// QueryAction. The initial set of events is empty, so the first QueryAction
-// should always have a QuerySelector to start things off. The final
-// QueryAction's output will be the output set of Events from the Query method.
+// effectively amounts to a pipeline of IDs. Each QueryAction has the potential
+// to output some set of IDs, which become the input for the next QueryAction.
+// The initial set of IDs is empty, so the first QueryAction should always have
+// a QuerySelector to start things off. The final QueryAction's output will be
+// the output set of IDs from the Query method.
 type QueryActions struct {
 	// This must match the Base field on all Keys being used in this pipeline
 	KeyBase      string
@@ -541,40 +539,39 @@ type QueryActions struct {
 
 // Query performs the given QueryActions pipeline. Whatever the final output
 // from the pipeline is is returned.
-func (c *Core) Query(qas QueryActions) ([]Event, error) {
+func (c *Core) Query(qas QueryActions) ([]ID, error) {
 	var err error
 
 	if qas.Now.IsZero() {
 		qas.Now = time.Now()
 	}
 
-	var eeb []byte
+	var iib []byte
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
 		k := Key{Base: qas.KeyBase}.String(c.o.RedisPrefix)
-		eeb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
+		iib, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
 	}, NewTS(qas.Now), &qas)
 	if err != nil {
 		return nil, err
 	}
 
-	var ee Events
-	if _, err = ee.UnmarshalMsg(eeb); err != nil {
+	var ii IDs
+	if _, err = ii.UnmarshalMsg(iib); err != nil {
 		return nil, err
 	}
-	if ee.Events == nil {
-		ee.Events = []Event{}
+	if ii.IDs == nil {
+		ii.IDs = []ID{}
 	}
 
-	return ee.Events, nil
+	return ii.IDs, nil
 }
 
 // SetCounts returns a slice with a number corresponding to the number of Events
-// in each given Key, where each Key contains a set of events. The
-// QueryScoreRange can be given to specify the range of values in the keys that
-// you want to be counted. The *FromInput fields in the QueryScoreRange cannot
-// be used.
+// in each given Key, where each Key contains a set of IDs. The QueryScoreRange
+// can be given to specify the range of values in the keys that you want to be
+// counted. The *FromInput fields in the QueryScoreRange cannot be used.
 func (c *Core) SetCounts(qrange QueryScoreRange, kk ...Key) ([]uint64, error) {
 	if len(kk) == 0 {
 		return []uint64{}, nil
