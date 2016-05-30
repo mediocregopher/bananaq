@@ -210,8 +210,8 @@ func TestQGet(t *T) {
 	assertKey(t, keyInProgAck, ii[0], ii[1])
 	assertSingleKey(t, keyPtr, ii[3])
 
-	// Artifically add two events to redo, make sure they come out in that order
-	// immediately
+	// Artificially add two events to redo, make sure they come out in that
+	// order immediately
 	requireAddToKey(t, keyRedo, ii[4], 0)
 	requireAddToKey(t, keyRedo, ii[5], 0)
 	assertKey(t, keyRedo, ii[4], ii[5])

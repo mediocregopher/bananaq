@@ -188,7 +188,7 @@ consumer).
 
 ### QSTATUS
 
-> QSTATUS [[QUEUE queue] [GROUP consumerGroup] ...]
+> QSTATUS [[QUEUE queue] [GROUP consumerGroup] …]
 
 Get information about all active queues and consumer groups. `QUEUE queue` and
 `GROUP consumerGroup` may both be specified zero or more times each to only
@@ -266,7 +266,7 @@ the given length or order.*
 
 ### QINFO
 
-> QINFO [[QUEUE queue] [GROUP consumerGroup] ...]
+> QINFO [[QUEUE queue] [GROUP consumerGroup] …]
 
 Get human readable information about all active queues and consumer groups.
 `QUEUE queue` and `GROUP consumerGroup` may both be specified zero or more times
@@ -288,5 +288,5 @@ array of strings, one per queue, each formatted like so:
 See QSTATUS for the meaning of the different fields
 
 *NOTE that this output is intended to be read by humans and its format may
-change slightly everytime the command is called. For easily machine readable
+change slightly every time the command is called. For easily machine readable
 output of the same data see the [QSTATUS](#qstatus) command*
