@@ -78,10 +78,10 @@ func TestQAdd(t *T) {
 	require.Nil(t, err)
 	assert.NotZero(t, id)
 
-	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	ewAvail, err := queueAvailable(queue)
 	require.Nil(t, err)
-	assertKey(t, keyAvailID, id)
-	assertKey(t, keyAvailEx, id)
+	assertKey(t, ewAvail.byArb, id)
+	assertKey(t, ewAvail.byExp, id)
 
 	e, err := testPeel.c.GetEvent(id)
 	require.Nil(t, err)
@@ -255,6 +255,18 @@ func TestQGet(t *T) {
 	assertKey(t, keyInProgAck, ii[0], ii[1])
 	assertSingleKey(t, keyPtr, id)
 	assertKey(t, keyRedo) // assert empty
+
+	// Insert an event that's already expired in redo, and make sure it doesn't
+	// come back
+	// TODO uncomment
+	//exRedo := randID(t, true)
+	//requireAddToKey(t, keyRedo, exRedo, 0)
+	//e, err = testPeel.QGet(cmd)
+	//require.Nil(t, err)
+	//assert.Equal(t, core.Event{}, e)
+	//assertKey(t, keyInProgAck, ii[0], ii[1])
+	//assertSingleKey(t, keyPtr, id)
+	//assertKey(t, keyRedo, exRedo)
 }
 
 func TestQGetBlocking(t *T) {
@@ -411,24 +423,24 @@ func TestClean(t *T) {
 func TestCleanAvailable(t *T) {
 	queue := testutil.RandStr()
 
-	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	ewAvail, err := queueAvailable(queue)
 	require.Nil(t, err)
 
 	ii0 := randID(t, false)
-	requireAddToKey(t, keyAvailID, ii0, 0)
-	requireAddToKey(t, keyAvailEx, ii0, ii0.Expire)
+	requireAddToKey(t, ewAvail.byArb, ii0, 0)
+	requireAddToKey(t, ewAvail.byExp, ii0, ii0.Expire)
 	ii1 := randID(t, true)
-	requireAddToKey(t, keyAvailID, ii1, 0)
-	requireAddToKey(t, keyAvailEx, ii1, ii1.Expire)
+	requireAddToKey(t, ewAvail.byArb, ii1, 0)
+	requireAddToKey(t, ewAvail.byExp, ii1, ii1.Expire)
 	ii2 := randID(t, false)
-	requireAddToKey(t, keyAvailID, ii2, 0)
-	requireAddToKey(t, keyAvailEx, ii2, ii2.Expire)
+	requireAddToKey(t, ewAvail.byArb, ii2, 0)
+	requireAddToKey(t, ewAvail.byExp, ii2, ii2.Expire)
 	ii3 := randID(t, true)
-	requireAddToKey(t, keyAvailID, ii3, 0)
-	requireAddToKey(t, keyAvailEx, ii3, ii3.Expire)
+	requireAddToKey(t, ewAvail.byArb, ii3, 0)
+	requireAddToKey(t, ewAvail.byExp, ii3, ii3.Expire)
 
 	require.Nil(t, testPeel.CleanAvailable(queue))
-	assertKey(t, keyAvailID, ii0, ii2)
+	assertKey(t, ewAvail.byArb, ii0, ii2)
 }
 
 func TestQStatus(t *T) {
@@ -449,7 +461,6 @@ func TestQStatus(t *T) {
 
 	cmd := QStatusCommand{
 		QueuesConsumerGroups: map[string][]string{
-			queue: []string{cg1},
 			queue: []string{cg1, cg2},
 		},
 	}

@@ -106,38 +106,21 @@ func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
 		return core.ID{}, err
 	}
 
-	keyAvailID, keyAvailEx, err := queueAvailableKeys(c.Queue)
+	ewAvail, err := queueAvailable(c.Queue)
 	if err != nil {
 		return core.ID{}, err
 	}
 
 	qa := core.QueryActions{
-		KeyBase: keyAvailID.Base,
-		QueryActions: []core.QueryAction{
-			{
-				QuerySelector: &core.QuerySelector{
-					Key: keyAvailID,
-					IDs: []core.ID{e.ID},
-				},
-			},
-			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys: []core.Key{keyAvailID},
-				},
-			},
-			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys:          []core.Key{keyAvailEx},
-					ExpireAsScore: true,
-				},
-			},
-		},
+		KeyBase:      ewAvail.base,
+		QueryActions: ewAvail.add(e.ID, e.ID.T),
+		Now:          now,
 	}
 	if _, err := p.c.Query(qa); err != nil {
 		return core.ID{}, err
 	}
 
-	p.c.KeyNotify(keyAvailID)
+	p.c.KeyNotify(ewAvail.byArb)
 
 	return e.ID, nil
 }
@@ -165,7 +148,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 		return p.qgetDirect(c)
 	}
 
-	keyAvailID, err := queueAvailableByID(c.Queue)
+	ewAvail, err := queueAvailable(c.Queue)
 	if err != nil {
 		return core.Event{}, err
 	}
@@ -175,7 +158,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 
 	for {
 		stopCh := make(chan struct{})
-		pushCh := p.c.KeyWait(keyAvailID, stopCh)
+		pushCh := p.c.KeyWait(ewAvail.byArb, stopCh)
 
 		if e, err := p.qgetDirect(c); err != nil || (e != core.Event{}) {
 			return e, err
@@ -192,7 +175,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 }
 
 func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
-	keyAvailID, err := queueAvailableByID(c.Queue)
+	ewAvail, err := queueAvailable(c.Queue)
 	if err != nil {
 		return core.Event{}, err
 	}
@@ -206,10 +189,11 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	keyPtr := keys[2]
 	keyInUse := keys[3]
 
-	now := time.Now()
+	now := core.NewTS(time.Now())
 
 	// Depending on if Expire is set, we might add the event to the inProgs or
 	// done
+	// TODO this is a terrible name now
 	var inProgOrDone []core.QueryAction
 	if !c.AckDeadline.IsZero() {
 		inProgOrDone = []core.QueryAction{
@@ -273,56 +257,34 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qq = append(qq, inProgOrDone...)
 	qq = append(qq, breakIfFound)
 
-	// Otherwise, we grab the most recent IDs from both inProgByID and done
+	// Otherwise grab the next event from avail after our pointer. Gotta clean
+	// avail first though. If we get an event, set our pointer and return
+	qq = append(qq, ewAvail.clean(now)...)
 	qq = append(qq,
 		core.QueryAction{
 			SingleGet: &keyPtr,
-			Union:     true,
 		},
-		core.QueryAction{
-			QuerySelector: &core.QuerySelector{
-				Key: keyAvailID,
-				QueryRangeSelect: &core.QueryRangeSelect{
-					QueryScoreRange: core.QueryScoreRange{
-						MinFromInput: true,
-						MinExcl:      true,
-					},
-					Limit: 1,
-				},
-			},
-			QueryConditional: core.QueryConditional{
-				IfInput: true,
-			},
-		},
+		ewAvail.afterInput(1),
 	)
-
-	// If we got an event from before, add it to inProgs/done and return
 	qq = append(qq, inProgOrDone...)
 	qq = append(qq, breakIfFound)
 
 	// The queue has no activity, simply get the first event in avail. Only
-	// applies if both done and inProg are actually empty. If they're not and
-	// we're here it means that the queue has simply been fully processed
-	// thusfar
+	// applies if our pointer is actually empty. If it's not and we're here it
+	// means that the queue has simply been fully processed thusfar
 	qq = append(qq, core.QueryAction{
-		QuerySelector: &core.QuerySelector{
-			Key:            keyAvailID,
-			PosRangeSelect: []int64{0, 0},
-		},
+		Break: true,
 		QueryConditional: core.QueryConditional{
-			And: []core.QueryConditional{
-				{
-					IfEmpty: &keyPtr,
-				},
-			},
+			IfNotEmpty: &keyPtr,
 		},
 	})
+	qq = append(qq, ewAvail.after(0, 1))
 	qq = append(qq, inProgOrDone...)
 
 	qa := core.QueryActions{
-		KeyBase:      keyAvailID.Base,
+		KeyBase:      ewAvail.base,
 		QueryActions: qq,
-		Now:          now,
+		Now:          now.Time(),
 	}
 
 	res, err := p.c.Query(qa)
@@ -467,32 +429,17 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 // CleanAvailable cleans up the stored Events for a given queue across all
 // consumer groups, removing those which have expired.
 func (p Peel) CleanAvailable(queue string) error {
-	now := time.Now()
-	nowTS := core.NewTS(now)
+	now := core.NewTS(time.Now())
 
-	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	ewAvail, err := queueAvailable(queue)
 	if err != nil {
 		return err
 	}
 
 	qa := core.QueryActions{
-		KeyBase: keyAvailID.Base,
-		QueryActions: []core.QueryAction{
-			{
-				QuerySelector: &core.QuerySelector{
-					Key: keyAvailEx,
-					QueryRangeSelect: &core.QueryRangeSelect{
-						QueryScoreRange: core.QueryScoreRange{
-							Max: nowTS,
-						},
-					},
-				},
-			},
-			{
-				RemoveFrom: []core.Key{keyAvailID, keyAvailEx},
-			},
-		},
-		Now: now,
+		KeyBase:      ewAvail.base,
+		QueryActions: ewAvail.clean(now),
+		Now:          now.Time(),
 	}
 
 	_, err = p.c.Query(qa)
@@ -547,24 +494,15 @@ type QueueStats struct {
 
 func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 	now := core.NewTS(time.Now())
-	keyAvailID, keyAvailEx, err := queueAvailableKeys(queue)
+	ewAvail, err := queueAvailable(queue)
 	if err != nil {
 		return QueueStats{}, err
 	}
 
-	qa := core.QueryActions{
-		KeyBase: keyAvailEx.Base,
-		QueryActions: []core.QueryAction{
-			{
-				QueryCount: &core.QueryCount{
-					Key: keyAvailEx,
-					QueryScoreRange: core.QueryScoreRange{
-						Min: now,
-					},
-				},
-			},
-		},
-	}
+	var qq []core.QueryAction
+	qq = append(qq, ewAvail.clean(now)...)
+	qq = append(qq, ewAvail.countNotExpired(now))
+
 	for _, cg := range cgroups {
 		var keys [4]core.Key
 		if keys, err = queueCGroupKeys(queue, cg); err != nil {
@@ -574,20 +512,12 @@ func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 		keyRedo := keys[1]
 		keyPtr := keys[2]
 
-		qa.QueryActions = append(
-			qa.QueryActions,
+		qq = append(
+			qq,
 			core.QueryAction{
 				SingleGet: &keyPtr,
 			},
-			core.QueryAction{
-				QueryCount: &core.QueryCount{
-					Key: keyAvailID,
-					QueryScoreRange: core.QueryScoreRange{
-						MinExcl:      true,
-						MinFromInput: true,
-					},
-				},
-			},
+			ewAvail.countAfterInput(),
 			core.QueryAction{
 				QuerySelector: &core.QuerySelector{
 					Key:            keyInProgAck,
@@ -607,6 +537,12 @@ func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 				CountInput: true,
 			},
 		)
+	}
+
+	qa := core.QueryActions{
+		KeyBase:      ewAvail.base,
+		QueryActions: qq,
+		Now:          now.Time(),
 	}
 
 	res, err := p.c.Query(qa)

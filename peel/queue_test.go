@@ -39,11 +39,11 @@ func TestAllQueuesCGroups(t *T) {
 	cg2 := testutil.RandStr()
 	cg3 := testutil.RandStr()
 
-	keyAvailID1, err := queueAvailableByID(q1)
+	ewAvail1, err := queueAvailable(q1)
 	require.Nil(t, err)
-	keyAvailID2, err := queueAvailableByID(q2)
+	ewAvail2, err := queueAvailable(q2)
 	require.Nil(t, err)
-	keyAvailID3, err := queueAvailableByID(q3)
+	ewAvail3, err := queueAvailable(q3)
 	require.Nil(t, err)
 
 	keyInUse11, err := queueInUseByExpire(q1, cg1)
@@ -53,9 +53,9 @@ func TestAllQueuesCGroups(t *T) {
 	keyInUse23, err := queueInUseByExpire(q2, cg3)
 	require.Nil(t, err)
 
-	requireAddToKey(t, keyAvailID1)
-	requireAddToKey(t, keyAvailID2)
-	requireAddToKey(t, keyAvailID3)
+	requireAddToKey(t, ewAvail1.byArb)
+	requireAddToKey(t, ewAvail2.byArb)
+	requireAddToKey(t, ewAvail3.byArb)
 	requireAddToKey(t, keyInUse11)
 	requireAddToKey(t, keyInUse12)
 	requireAddToKey(t, keyInUse23)

@@ -308,6 +308,14 @@ func (k Key) String(prefix string) string {
 	return fmt.Sprintf("%s:k:{%s}", prefix, k.Base)
 }
 
+// Copy returns a deep copy of the Key
+func (k Key) Copy() Key {
+	subs := make([]string, len(k.Subs))
+	copy(subs, k.Subs)
+	k.Subs = subs
+	return k
+}
+
 // KeyFromString takes the string form of a Key and returns the associated
 // String. Will probably panic if the given string is not valid, so check
 // yourself before you wreck yourself.
@@ -530,6 +538,7 @@ type QueryActions struct {
 
 	// Optional, may be passed in if there is a previous notion of "current
 	// time", to maintain consitency
+	// TODO should probably be TS
 	Now time.Time `msg:"-"`
 }
 

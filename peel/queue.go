@@ -41,26 +41,12 @@ func queueKeyUnmarshal(k core.Key) (core.Key, error) {
 
 // Keeps track of events which are available to be retrieved by any particular
 // consumer group, with scores corresponding to the event's id.
-func queueAvailableByID(queue string) (core.Key, error) {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{"available", "id"}})
-}
-
-// Keeps track of events which are available to be retrieved by any particular
-// consumer group, with scores corresponding to the event's expire time.
-func queueAvailableByExpire(queue string) (core.Key, error) {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{"available", "expire"}})
-}
-
-func queueAvailableKeys(queue string) (core.Key, core.Key, error) {
-	keyAvailID, err := queueAvailableByID(queue)
+func queueAvailable(queue string) (exWrap, error) {
+	k, err := queueKeyMarshal(core.Key{Base: queue, Subs: []string{"available"}})
 	if err != nil {
-		return core.Key{}, core.Key{}, err
+		return exWrap{}, err
 	}
-	keyAvailEx, err := queueAvailableByExpire(queue)
-	if err != nil {
-		return core.Key{}, core.Key{}, err
-	}
-	return keyAvailID, keyAvailEx, nil
+	return newExWrap(k), nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -81,7 +67,7 @@ func queueRedo(queue, cgroup string) (core.Key, error) {
 // Single key, used to keep track of newest event retrieved from avail by the
 // cgroup
 func queuePointer(queue, cgroup string) (core.Key, error) {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "done"}})
+	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "ptr"}})
 }
 
 // Keeps track of all events currently in use by a cgroup which haven't expired.
