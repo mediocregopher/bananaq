@@ -71,8 +71,7 @@ func (ew exWrap) removeFromInput() core.QueryAction {
 // returns actions which will remove all events whose expire has passed (based
 // on the given TS) from both underlying sets. The output from these actions
 // will be the events which were removed
-// TODO rename this to removeExpired
-func (ew exWrap) clean(now core.TS) []core.QueryAction {
+func (ew exWrap) removeExpired(now core.TS) []core.QueryAction {
 	return []core.QueryAction{
 		{
 			QuerySelector: &core.QuerySelector{

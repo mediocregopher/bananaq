@@ -60,7 +60,7 @@ func TestExWrapAddClean(t *T) {
 	assertKey(t, ex.byArb, id1, id2, id3)
 	assertKey(t, ex.byExp, id1, id2, id3)
 
-	requireExWrapDo(t, now, ex, ex.clean(now)...)
+	requireExWrapDo(t, now, ex, ex.removeExpired(now)...)
 	assertKey(t, ex.byArb, id1, id2)
 	assertKey(t, ex.byExp, id1, id2)
 }

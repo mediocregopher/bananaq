@@ -211,14 +211,14 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 
 	// First, if there's any IDs in redo, we try to grab the first one from
 	// there
-	qq = append(qq, ewRedo.clean(now)...)
+	qq = append(qq, ewRedo.removeExpired(now)...)
 	qq = append(qq, ewRedo.after(0, 1))
 	qq = append(qq, ewRedo.removeFromInput())
 	qq = append(qq, maybeDone...)
 
 	// Otherwise grab the next event from avail after our pointer. Gotta clean
 	// avail first though. If we get an event, set our pointer and return
-	qq = append(qq, ewAvail.clean(now)...)
+	qq = append(qq, ewAvail.removeExpired(now)...)
 	qq = append(qq,
 		core.QueryAction{
 			SingleGet: &keyPtr,
@@ -277,7 +277,7 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 	}
 
 	var qq []core.QueryAction
-	qq = append(qq, ewInProg.clean(now)...)
+	qq = append(qq, ewInProg.removeExpired(now)...)
 	qq = append(qq, core.QueryAction{
 		QuerySelector: &core.QuerySelector{
 			Key: ewInProg.byArb,
@@ -318,8 +318,8 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 
 	// First clean expired events from everything
 	var qq []core.QueryAction
-	qq = append(qq, ewInProg.clean(now)...)
-	qq = append(qq, ewRedo.clean(now)...)
+	qq = append(qq, ewInProg.removeExpired(now)...)
+	qq = append(qq, ewRedo.removeExpired(now)...)
 
 	// find all events who missed their ack deadline, remove them
 	// from both inProgs and add them to redo
@@ -349,7 +349,7 @@ func (p Peel) CleanAvailable(queue string) error {
 
 	qa := core.QueryActions{
 		KeyBase:      ewAvail.base,
-		QueryActions: ewAvail.clean(now),
+		QueryActions: ewAvail.removeExpired(now),
 		Now:          now,
 	}
 
@@ -409,7 +409,7 @@ func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 	}
 
 	var qq []core.QueryAction
-	qq = append(qq, ewAvail.clean(now)...)
+	qq = append(qq, ewAvail.removeExpired(now)...)
 	qq = append(qq, ewAvail.countNotExpired(now))
 
 	for _, cg := range cgroups {
