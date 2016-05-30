@@ -180,82 +180,41 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		return core.Event{}, err
 	}
 
-	keys, err := queueCGroupKeys(c.Queue, c.ConsumerGroup)
+	ewInProg, ewRedo, keyPtr, err := queueCGroupKeys(c.Queue, c.ConsumerGroup)
 	if err != nil {
 		return core.Event{}, err
 	}
-	keyInProgAck := keys[0]
-	keyRedo := keys[1]
-	keyPtr := keys[2]
-	keyInUse := keys[3]
 
 	now := core.NewTS(time.Now())
 
-	// Depending on if Expire is set, we might add the event to the inProgs or
-	// done
-	// TODO this is a terrible name now
-	var inProgOrDone []core.QueryAction
+	// Depending on if Expire is set, we might add the event to the inProg in
+	// addition to setting ptr
+	maybeDone := make([]core.QueryAction, 0, 3)
+	maybeDone = append(maybeDone, core.QueryAction{
+		QuerySingleSet: &core.QuerySingleSet{
+			Key:     keyPtr,
+			IfNewer: true,
+		},
+	})
 	if !c.AckDeadline.IsZero() {
-		inProgOrDone = []core.QueryAction{
-			{
-				QuerySingleSet: &core.QuerySingleSet{
-					Key:     keyPtr,
-					IfNewer: true,
-				},
-			},
-			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys:  []core.Key{keyInProgAck},
-					Score: core.NewTS(c.AckDeadline),
-				},
-			},
-			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys:          []core.Key{keyInUse},
-					ExpireAsScore: true,
-				},
-			},
-		}
-	} else {
-		inProgOrDone = []core.QueryAction{
-			{
-				QuerySingleSet: &core.QuerySingleSet{
-					Key:     keyPtr,
-					IfNewer: true,
-				},
-			},
-			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys:          []core.Key{keyInUse},
-					ExpireAsScore: true,
-				},
-			},
-		}
+		addToInProg := ewInProg.addFromInput(core.NewTS(c.AckDeadline))
+		maybeDone = append(maybeDone, addToInProg...)
 	}
-
-	breakIfFound := core.QueryAction{
+	maybeDone = append(maybeDone, core.QueryAction{
 		Break: true,
 		QueryConditional: core.QueryConditional{
 			IfInput: true,
 		},
-	}
+	})
 
 	var qq []core.QueryAction
-	// First, if there's any IDs in redo, we grab the first one from there
-	// and move it to inProg/done
-	qq = append(qq,
-		core.QueryAction{
-			QuerySelector: &core.QuerySelector{
-				Key:            keyRedo,
-				PosRangeSelect: []int64{0, 0},
-			},
-		},
-		core.QueryAction{
-			RemoveFrom: []core.Key{keyRedo},
-		},
-	)
-	qq = append(qq, inProgOrDone...)
-	qq = append(qq, breakIfFound)
+
+	// First, if there's any IDs in redo, we try to grab the first one from
+	// there
+	qq = append(qq, ewRedo.clean(now)...)
+	qq = append(qq, ewRedo.after(0, 1))
+	qq = append(qq, ewRedo.removeFromInput())
+	qq = append(qq, maybeDone...)
 
 	// Otherwise grab the next event from avail after our pointer. Gotta clean
 	// avail first though. If we get an event, set our pointer and return
@@ -266,8 +225,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		},
 		ewAvail.afterInput(1),
 	)
-	qq = append(qq, inProgOrDone...)
-	qq = append(qq, breakIfFound)
+	qq = append(qq, maybeDone...)
 
 	// The queue has no activity, simply get the first event in avail. Only
 	// applies if our pointer is actually empty. If it's not and we're here it
@@ -279,7 +237,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 		},
 	})
 	qq = append(qq, ewAvail.after(0, 1))
-	qq = append(qq, inProgOrDone...)
+	qq = append(qq, maybeDone...)
 
 	qa := core.QueryActions{
 		KeyBase:      ewAvail.base,
@@ -311,44 +269,30 @@ type QAckCommand struct {
 // acknowledged. false will be returned if the deadline was missed, and
 // therefore some other consumer may re-process the Event later.
 func (p Peel) QAck(c QAckCommand) (bool, error) {
-	now := time.Now()
+	now := core.NewTS(time.Now())
 
-	keys, err := queueCGroupKeys(c.Queue, c.ConsumerGroup)
+	ewInProg, err := queueInProgress(c.Queue, c.ConsumerGroup)
 	if err != nil {
 		return false, err
 	}
-	keyInProgAck := keys[0]
-	keyPtr := keys[2]
 
-	qa := core.QueryActions{
-		KeyBase: keyPtr.Base,
-		QueryActions: []core.QueryAction{
-			{
-				QuerySelector: &core.QuerySelector{
-					Key: keyInProgAck,
-					QueryIDScoreSelect: &core.QueryIDScoreSelect{
-						ID:  c.EventID,
-						Min: core.NewTS(now),
-					},
-				},
-			},
-			{
-				Break: true,
-				QueryConditional: core.QueryConditional{
-					IfNoInput: true,
-				},
-			},
-			{
-				RemoveFrom: []core.Key{keyInProgAck},
-			},
-			{
-				QuerySingleSet: &core.QuerySingleSet{
-					Key:     keyPtr,
-					IfNewer: true,
-				},
+	var qq []core.QueryAction
+	qq = append(qq, ewInProg.clean(now)...)
+	qq = append(qq, core.QueryAction{
+		QuerySelector: &core.QuerySelector{
+			Key: ewInProg.byArb,
+			QueryIDScoreSelect: &core.QueryIDScoreSelect{
+				ID:  c.EventID,
+				Min: now,
 			},
 		},
-		Now: now,
+	})
+	qq = append(qq, ewInProg.removeFromInput())
+
+	qa := core.QueryActions{
+		KeyBase:      ewInProg.base,
+		QueryActions: qq,
+		Now:          now.Time(),
 	}
 
 	res, err := p.c.Query(qa)
@@ -365,61 +309,28 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 // available to be retrieved again. This should be called periodically for all
 // queue/consumerGroups.
 func (p Peel) Clean(queue, consumerGroup string) error {
-	now := time.Now()
-	nowTS := core.NewTS(now)
+	now := core.NewTS(time.Now())
 
-	keys, err := queueCGroupKeys(queue, consumerGroup)
+	ewInProg, ewRedo, keyPtr, err := queueCGroupKeys(queue, consumerGroup)
 	if err != nil {
 		return err
 	}
-	keyInProgAck := keys[0]
-	keyRedo := keys[1]
-	keyInUse := keys[3]
 
-	qsr := core.QueryScoreRange{
-		Max: nowTS,
-	}
+	// First clean expired events from everything
+	var qq []core.QueryAction
+	qq = append(qq, ewInProg.clean(now)...)
+	qq = append(qq, ewRedo.clean(now)...)
+
+	// find all events who missed their ack deadline, remove them
+	// from both inProgs and add them to redo
+	qq = append(qq, ewInProg.before(now, 0))
+	qq = append(qq, ewInProg.removeFromInput())
+	qq = append(qq, ewRedo.addFromInput(0)...)
+
 	qa := core.QueryActions{
-		KeyBase: keyInUse.Base,
-		QueryActions: []core.QueryAction{
-			// First find all events who missed their ack deadline, remove them
-			// from both inProgs and add them to redo
-			{
-				QuerySelector: &core.QuerySelector{
-					Key: keyInProgAck,
-					QueryRangeSelect: &core.QueryRangeSelect{
-						QueryScoreRange: qsr,
-					},
-				},
-			},
-			{
-				RemoveFrom: []core.Key{keyInProgAck},
-			},
-			{
-				QueryAddTo: &core.QueryAddTo{
-					Keys: []core.Key{keyRedo},
-				},
-			},
-
-			// Next find all events in inUse that have outright expired,
-			// remove them from all of our sets
-			{
-				QuerySelector: &core.QuerySelector{
-					Key: keyInUse,
-					QueryRangeSelect: &core.QueryRangeSelect{
-						QueryScoreRange: qsr,
-					},
-				},
-			},
-			{
-				RemoveFrom: []core.Key{
-					keyInProgAck,
-					keyRedo,
-					keyInUse,
-				},
-			},
-		},
-		Now: now,
+		KeyBase:      keyPtr.Base,
+		QueryActions: qq,
+		Now:          now.Time(),
 	}
 
 	_, err = p.c.Query(qa)
@@ -468,8 +379,6 @@ func (p Peel) CleanAll() error {
 }
 
 // ConsumerGroupStats are available statistics about a queue/consumer group.
-// Note that these numbers include events which have expired but haven't been
-// cleaned out of the consumer group's data yet.
 type ConsumerGroupStats struct {
 	// Number of events the consumer group has yet to process for the queue
 	Available uint64
@@ -504,38 +413,19 @@ func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 	qq = append(qq, ewAvail.countNotExpired(now))
 
 	for _, cg := range cgroups {
-		var keys [4]core.Key
-		if keys, err = queueCGroupKeys(queue, cg); err != nil {
+		var ewInProg, ewRedo exWrap
+		var keyPtr core.Key
+		if ewInProg, ewRedo, keyPtr, err = queueCGroupKeys(queue, cg); err != nil {
 			return QueueStats{}, err
 		}
-		keyInProgAck := keys[0]
-		keyRedo := keys[1]
-		keyPtr := keys[2]
-
-		qq = append(
-			qq,
+		qq = append(qq,
+			// reset the input
 			core.QueryAction{
 				SingleGet: &keyPtr,
 			},
 			ewAvail.countAfterInput(),
-			core.QueryAction{
-				QuerySelector: &core.QuerySelector{
-					Key:            keyInProgAck,
-					PosRangeSelect: []int64{0, -1},
-				},
-			},
-			core.QueryAction{
-				CountInput: true,
-			},
-			core.QueryAction{
-				QuerySelector: &core.QuerySelector{
-					Key:            keyRedo,
-					PosRangeSelect: []int64{0, -1},
-				},
-			},
-			core.QueryAction{
-				CountInput: true,
-			},
+			ewInProg.countNotExpired(now),
+			ewRedo.countNotExpired(now),
 		)
 	}
 

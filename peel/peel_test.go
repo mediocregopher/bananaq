@@ -1,6 +1,7 @@
 package peel
 
 import (
+	"log"
 	. "testing"
 	"time"
 
@@ -168,12 +169,8 @@ func TestQGet(t *T) {
 		t.Logf("ii[%d]: %d (%#v)", i, id, id)
 	}
 
-	keys, err := queueCGroupKeys(queue, cgroup)
+	ewInProg, ewRedo, keyPtr, err := queueCGroupKeys(queue, cgroup)
 	require.Nil(t, err)
-	keyInProgAck := keys[0]
-	keyRedo := keys[1]
-	keyPtr := keys[2]
-	keyInUse := keys[3]
 
 	// Test that a "blank" queue gives us its first event
 	cmd := QGetCommand{
@@ -184,63 +181,86 @@ func TestQGet(t *T) {
 	e, err := testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ii[0], e.ID)
-	assertKey(t, keyInProgAck, ii[0])
-	assertKey(t, keyInUse, ii[0])
+	assertKey(t, ewInProg.byArb, ii[0])
+	assertKey(t, ewInProg.byExp, ii[0])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
+	assertSingleKey(t, keyPtr, ii[0])
 
-	// Test that a queue with empty done but an inProg returns one after inProg
+	// Test that a queue with an inProg returns one after inProg
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ii[1], e.ID)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
-	assertKey(t, keyInUse, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
+	assertSingleKey(t, keyPtr, ii[1])
 
-	// Test that empty expire goes straight to done
+	// Test that empty expire doesn't go to inProg
 	cmd.AckDeadline = time.Time{}
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ii[2], e.ID)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
 	assertSingleKey(t, keyPtr, ii[2])
 
-	// Test that a queue with an event in done ahead of all events in inProg
-	// returns the next one correctly
+	// Test that a queue with pointer ahead of all events in inProg returns the
+	// next one correctly
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ii[3], e.ID)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
 	assertSingleKey(t, keyPtr, ii[3])
 
-	// Artificially add two events to redo, make sure they come out in that
-	// order immediately
-	requireAddToKey(t, keyRedo, ii[4], 0)
-	requireAddToKey(t, keyRedo, ii[5], 0)
-	assertKey(t, keyRedo, ii[4], ii[5])
+	// Artificially add two events to redo
+	requireAddToKey(t, ewRedo.byArb, ii[4], 0)
+	requireAddToKey(t, ewRedo.byExp, ii[4], ii[4].Expire)
+	requireAddToKey(t, ewRedo.byArb, ii[5], 0)
+	requireAddToKey(t, ewRedo.byExp, ii[5], ii[5].Expire)
+	// pointer should theoretically be ii[5] at this point, but it won't be
+	// because we did this artificially
 
+	// Get first redo
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ii[4], e.ID)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb, ii[5])
+	assertKey(t, ewRedo.byExp, ii[5])
 	assertSingleKey(t, keyPtr, ii[4])
-	assertKey(t, keyRedo, ii[5])
 
+	// Get second redo
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, ii[5], e.ID)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
 	assertSingleKey(t, keyPtr, ii[5])
-	assertKey(t, keyRedo) // assert empty
 
 	// At this point the queue has no available events, make sure empty event is
 	// returned
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, core.Event{}, e)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
 	assertSingleKey(t, keyPtr, ii[5])
-	assertKey(t, keyRedo) // assert empty
 
 	// Now we're gonna do something mean, and insert an event with an expire
-	// which is before the most recent expire in done
+	// which is before the most recent expire in pointer, and make sure it comes
+	// back
 	contents := testutil.RandStr()
 	expire := ii[5].Expire.Time().Add(-5 * time.Second)
 	id, err := testPeel.QAdd(QAddCommand{
@@ -249,24 +269,46 @@ func TestQGet(t *T) {
 		Contents: contents,
 	})
 	require.Nil(t, err)
+
 	e, err = testPeel.QGet(cmd)
 	require.Nil(t, err)
 	assert.Equal(t, core.Event{ID: id, Contents: contents}, e)
-	assertKey(t, keyInProgAck, ii[0], ii[1])
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
 	assertSingleKey(t, keyPtr, id)
-	assertKey(t, keyRedo) // assert empty
+
+	// Add an expired event, make sure it doesn't come back (since avail should
+	// get cleaned by QGet)
+	_, err = testPeel.QAdd(QAddCommand{
+		Queue:    queue,
+		Expire:   time.Now().Add(-5 * time.Minute),
+		Contents: testutil.RandStr(),
+	})
+	require.Nil(t, err)
+	e, err = testPeel.QGet(cmd)
+	require.Nil(t, err)
+	assert.Equal(t, core.Event{}, e)
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
+	assertSingleKey(t, keyPtr, id)
 
 	// Insert an event that's already expired in redo, and make sure it doesn't
 	// come back
-	// TODO uncomment
-	//exRedo := randID(t, true)
-	//requireAddToKey(t, keyRedo, exRedo, 0)
-	//e, err = testPeel.QGet(cmd)
-	//require.Nil(t, err)
-	//assert.Equal(t, core.Event{}, e)
-	//assertKey(t, keyInProgAck, ii[0], ii[1])
-	//assertSingleKey(t, keyPtr, id)
-	//assertKey(t, keyRedo, exRedo)
+	exRedo := randID(t, true)
+	requireAddToKey(t, ewRedo.byArb, exRedo, 0)
+	requireAddToKey(t, ewRedo.byExp, exRedo, exRedo.Expire)
+	e, err = testPeel.QGet(cmd)
+	require.Nil(t, err)
+	assert.Equal(t, core.Event{}, e)
+	assertKey(t, ewInProg.byArb, ii[0], ii[1])
+	assertKey(t, ewInProg.byExp, ii[0], ii[1])
+	assertKey(t, ewRedo.byArb)
+	assertKey(t, ewRedo.byExp)
+	assertSingleKey(t, keyPtr, id)
 }
 
 func TestQGetBlocking(t *T) {
@@ -333,13 +375,12 @@ func TestQAck(t *T) {
 	queue, ii := newTestQueue(t, 2)
 	cgroup := testutil.RandStr()
 
-	keys, err := queueCGroupKeys(queue, cgroup)
+	ewInProg, _, _, err := queueCGroupKeys(queue, cgroup)
 	require.Nil(t, err)
-	keyInProgAck := keys[0]
-	keyPtr := keys[2]
 
 	ackDeadline := core.NewTS(ii[0].T.Time().Add(10 * time.Millisecond))
-	requireAddToKey(t, keyInProgAck, ii[0], ackDeadline)
+	requireAddToKey(t, ewInProg.byArb, ii[0], ackDeadline)
+	requireAddToKey(t, ewInProg.byExp, ii[0], ii[0].Expire)
 
 	cmd := QAckCommand{
 		Queue:         queue,
@@ -349,75 +390,70 @@ func TestQAck(t *T) {
 	acked, err := testPeel.QAck(cmd)
 	require.Nil(t, err)
 	assert.True(t, acked)
-	assertKey(t, keyInProgAck)
-	assertSingleKey(t, keyPtr, ii[0])
+	assertKey(t, ewInProg.byArb)
+	assertKey(t, ewInProg.byExp)
 
 	acked, err = testPeel.QAck(cmd)
 	require.Nil(t, err)
 	assert.False(t, acked)
-	assertKey(t, keyInProgAck)
-	assertSingleKey(t, keyPtr, ii[0])
+	assertKey(t, ewInProg.byArb)
+	assertKey(t, ewInProg.byExp)
 
 	ackDeadline = core.NewTS(ii[1].T.Time().Add(-10 * time.Millisecond))
-	requireAddToKey(t, keyInProgAck, ii[1], ackDeadline)
+	requireAddToKey(t, ewInProg.byArb, ii[1], ackDeadline)
+	requireAddToKey(t, ewInProg.byExp, ii[1], ii[1].Expire)
 
 	cmd.EventID = ii[1]
 	acked, err = testPeel.QAck(cmd)
 	require.Nil(t, err)
 	assert.False(t, acked)
-	assertKey(t, keyInProgAck, ii[1])
-	assertSingleKey(t, keyPtr, ii[0])
+	assertKey(t, ewInProg.byArb, ii[1])
+	assertKey(t, ewInProg.byExp, ii[1])
 }
 
 func TestClean(t *T) {
 	queue := testutil.RandStr()
 	cgroup := testutil.RandStr()
-
-	keys, err := queueCGroupKeys(queue, cgroup)
-	require.Nil(t, err)
-	keyInProgAck := keys[0]
-	keyRedo := keys[1]
-	keyInUse := keys[3]
-
 	now := time.Now()
+
+	ewInProg, ewRedo, _, err := queueCGroupKeys(queue, cgroup)
+	require.Nil(t, err)
 
 	// in progress, has neither expired nor missed its deadline
 	ii0 := randID(t, false)
-	requireAddToKey(t, keyInProgAck, ii0, core.NewTS(now.Add(1*time.Second)))
-	requireAddToKey(t, keyInUse, ii0, ii0.Expire)
+	log.Printf("ii0: %s", ii0)
+	requireAddToKey(t, ewInProg.byArb, ii0, core.NewTS(now.Add(1*time.Second)))
+	requireAddToKey(t, ewInProg.byExp, ii0, ii0.Expire)
 
 	// in progress, missed its deadline
 	ii1 := randID(t, false)
-	requireAddToKey(t, keyInProgAck, ii1, core.NewTS(now.Add(-10*time.Millisecond)))
-	requireAddToKey(t, keyInUse, ii1, ii1.Expire)
+	log.Printf("ii1: %s", ii1)
+	requireAddToKey(t, ewInProg.byArb, ii1, core.NewTS(now.Add(-10*time.Millisecond)))
+	requireAddToKey(t, ewInProg.byExp, ii1, ii1.Expire)
 
 	// in progress, expired
 	ii2 := randID(t, true)
-	requireAddToKey(t, keyInProgAck, ii2, core.NewTS(now.Add(-10*time.Millisecond)))
-	requireAddToKey(t, keyInUse, ii2, ii2.Expire)
+	log.Printf("ii2: %s", ii2)
+	requireAddToKey(t, ewInProg.byArb, ii2, core.NewTS(now.Add(-10*time.Millisecond)))
+	requireAddToKey(t, ewInProg.byExp, ii2, ii2.Expire)
 
 	// in redo, not expired
 	ii3 := randID(t, false)
-	requireAddToKey(t, keyRedo, ii3, 0)
-	requireAddToKey(t, keyInUse, ii3, ii3.Expire)
+	log.Printf("ii3: %s", ii3)
+	requireAddToKey(t, ewRedo.byArb, ii3, 0)
+	requireAddToKey(t, ewRedo.byExp, ii3, ii3.Expire)
 
 	// in redo, expired
 	ii4 := randID(t, true)
-	requireAddToKey(t, keyRedo, ii4, 0)
-	requireAddToKey(t, keyInUse, ii4, ii4.Expire)
-
-	// in use (so really just done), not expired
-	ii5 := randID(t, false)
-	requireAddToKey(t, keyInUse, ii5, ii5.Expire)
-
-	// in use (so really just done), expired
-	ii6 := randID(t, true)
-	requireAddToKey(t, keyInUse, ii6, ii6.Expire)
+	log.Printf("ii4: %s", ii4)
+	requireAddToKey(t, ewRedo.byArb, ii4, 0)
+	requireAddToKey(t, ewRedo.byExp, ii4, ii4.Expire)
 
 	require.Nil(t, testPeel.Clean(queue, cgroup))
-	assertKey(t, keyInProgAck, ii0)
-	assertKey(t, keyRedo, ii1, ii3)
-	assertKey(t, keyInUse, ii0, ii1, ii3, ii5)
+	assertKey(t, ewInProg.byArb, ii0)
+	assertKey(t, ewInProg.byExp, ii0)
+	assertKey(t, ewRedo.byArb, ii1, ii3)
+	assertKey(t, ewRedo.byExp, ii1, ii3)
 }
 
 func TestCleanAvailable(t *T) {
@@ -448,16 +484,16 @@ func TestQStatus(t *T) {
 	cg1 := testutil.RandStr()
 	cg2 := testutil.RandStr()
 
-	keys, err := queueCGroupKeys(queue, cg1)
+	ewInProg, ewRedo, keyPtr, err := queueCGroupKeys(queue, cg1)
 	require.Nil(t, err)
-	keyInProgAck := keys[0]
-	keyRedo := keys[1]
-	keyPtr := keys[2]
 
-	requireAddToKey(t, keyInProgAck, ii[0], core.NewTS(time.Now().Add(1*time.Minute)))
-	requireAddToKey(t, keyInProgAck, ii[1], core.NewTS(time.Now().Add(1*time.Minute)))
+	requireAddToKey(t, ewInProg.byArb, ii[0], core.NewTS(time.Now().Add(1*time.Minute)))
+	requireAddToKey(t, ewInProg.byExp, ii[0], ii[0].Expire)
+	requireAddToKey(t, ewInProg.byArb, ii[1], core.NewTS(time.Now().Add(1*time.Minute)))
+	requireAddToKey(t, ewInProg.byExp, ii[1], ii[1].Expire)
 	requireSetSingleKey(t, keyPtr, ii[2])
-	requireAddToKey(t, keyRedo, ii[2], 0)
+	requireAddToKey(t, ewRedo.byArb, ii[2], 0)
+	requireAddToKey(t, ewRedo.byExp, ii[2], ii[2].Expire)
 
 	cmd := QStatusCommand{
 		QueuesConsumerGroups: map[string][]string{

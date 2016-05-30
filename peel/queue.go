@@ -54,14 +54,22 @@ func queueAvailable(queue string) (exWrap, error) {
 // Keeps track of events that are currently in progress, with scores
 // corresponding to the event's ack deadline. Used to timeout in progress events
 // and put them in redo
-func queueInProgressByAck(queue, cgroup string) (core.Key, error) {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "inprogress", "ack"}})
+func queueInProgress(queue, cgroup string) (exWrap, error) {
+	k, err := queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "inprogress"}})
+	if err != nil {
+		return exWrap{}, err
+	}
+	return newExWrap(k), nil
 }
 
 // Keeps track of events which were previously attempted to be processed but
 // failed. Score is the event's id
-func queueRedo(queue, cgroup string) (core.Key, error) {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "redo"}})
+func queueRedo(queue, cgroup string) (exWrap, error) {
+	k, err := queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "redo"}})
+	if err != nil {
+		return exWrap{}, err
+	}
+	return newExWrap(k), nil
 }
 
 // Single key, used to keep track of newest event retrieved from avail by the
@@ -70,28 +78,23 @@ func queuePointer(queue, cgroup string) (core.Key, error) {
 	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "ptr"}})
 }
 
-// Keeps track of all events currently in use by a cgroup which haven't expired.
-// Used in order to clean expired events out of a group
-func queueInUseByExpire(queue, cgroup string) (core.Key, error) {
-	return queueKeyMarshal(core.Key{Base: queue, Subs: []string{cgroup, "inuse"}})
-}
-
-func queueCGroupKeys(queue, cgroup string) ([4]core.Key, error) {
-	var ret [4]core.Key
-	var err error
-
-	next := func(prev error, fn func(string, string) (core.Key, error)) (core.Key, error) {
-		if prev != nil {
-			return core.Key{}, prev
-		}
-		return fn(queue, cgroup)
+func queueCGroupKeys(queue, cgroup string) (exWrap, exWrap, core.Key, error) {
+	ewInProg, err := queueInProgress(queue, cgroup)
+	if err != nil {
+		return exWrap{}, exWrap{}, core.Key{}, err
 	}
 
-	ret[0], err = next(err, queueInProgressByAck)
-	ret[1], err = next(err, queueRedo)
-	ret[2], err = next(err, queuePointer)
-	ret[3], err = next(err, queueInUseByExpire)
-	return ret, err
+	ewRedo, err := queueRedo(queue, cgroup)
+	if err != nil {
+		return exWrap{}, exWrap{}, core.Key{}, err
+	}
+
+	keyPtr, err := queuePointer(queue, cgroup)
+	if err != nil {
+		return exWrap{}, exWrap{}, core.Key{}, err
+	}
+
+	return ewInProg, ewRedo, keyPtr, nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////

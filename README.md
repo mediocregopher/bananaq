@@ -251,14 +251,14 @@ The statistic maps each contain these keys/values:
   be the same across all consumer groups for that queue).
 
 * inprogress - The number of events marked as in-progress (i.e. are awaiting
-  being [QACK'd](#qack)) for this consumer group. This includes expired events.
+  being [QACK'd](#qack)) for this consumer group.
 
 * redo - The number of events which were marked as in-progress but were
   timedout, and so are currently available for consuming again by this
-  consumer group. This includes expired events.
+  consumer group.
 
 * available - The number of events which are available for being consumed by a
-  consumer in this consumer group. This includes expired events.
+  consumer in this consumer group.
 
 *NOTE that there may in the future be more information returned in the
 statistics maps returned by this call; do not assume that they will always be of
