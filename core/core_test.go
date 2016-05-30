@@ -901,7 +901,7 @@ func TestSingleGetSet(t *T) {
 
 	// Getting a set ID after the expire doesn't return it
 	res, err = testCore.Query(QueryActions{
-		Now:     (id.Expire + 1).Time(),
+		Now:     id.Expire + 1,
 		KeyBase: key.Base,
 		QueryActions: []QueryAction{
 			{

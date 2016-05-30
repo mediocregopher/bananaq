@@ -94,8 +94,8 @@ type QAddCommand struct {
 // QAdd adds an event to a queue. Once Expire is reached the event will no
 // longer be considered valid in the queue, and will eventually be cleaned up.
 func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
-	now := time.Now()
-	e, err := p.c.NewEvent(core.NewTS(now), core.NewTS(c.Expire), c.Contents)
+	now := core.NewTS(time.Now())
+	e, err := p.c.NewEvent(now, core.NewTS(c.Expire), c.Contents)
 	if err != nil {
 		return core.ID{}, err
 	}
@@ -242,7 +242,7 @@ func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	qa := core.QueryActions{
 		KeyBase:      ewAvail.base,
 		QueryActions: qq,
-		Now:          now.Time(),
+		Now:          now,
 	}
 
 	res, err := p.c.Query(qa)
@@ -292,7 +292,7 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 	qa := core.QueryActions{
 		KeyBase:      ewInProg.base,
 		QueryActions: qq,
-		Now:          now.Time(),
+		Now:          now,
 	}
 
 	res, err := p.c.Query(qa)
@@ -330,7 +330,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	qa := core.QueryActions{
 		KeyBase:      keyPtr.Base,
 		QueryActions: qq,
-		Now:          now.Time(),
+		Now:          now,
 	}
 
 	_, err = p.c.Query(qa)
@@ -350,7 +350,7 @@ func (p Peel) CleanAvailable(queue string) error {
 	qa := core.QueryActions{
 		KeyBase:      ewAvail.base,
 		QueryActions: ewAvail.clean(now),
-		Now:          now.Time(),
+		Now:          now,
 	}
 
 	_, err = p.c.Query(qa)
@@ -432,7 +432,7 @@ func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 	qa := core.QueryActions{
 		KeyBase:      ewAvail.base,
 		QueryActions: qq,
-		Now:          now.Time(),
+		Now:          now,
 	}
 
 	res, err := p.c.Query(qa)

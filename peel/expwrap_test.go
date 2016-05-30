@@ -19,7 +19,7 @@ func requireExWrapDo(t *T, now core.TS, ex exWrap, aa ...core.QueryAction) {
 	_, err := testPeel.c.Query(core.QueryActions{
 		KeyBase:      ex.byArb.Base,
 		QueryActions: aa,
-		Now:          now.Time(),
+		Now:          now,
 	})
 	require.Nil(t, err)
 }
@@ -28,7 +28,7 @@ func assertExWrapOut(t *T, now core.TS, ex exWrap, out []core.ID, aa ...core.Que
 	res, err := testPeel.c.Query(core.QueryActions{
 		KeyBase:      ex.byArb.Base,
 		QueryActions: aa,
-		Now:          now.Time(),
+		Now:          now,
 	})
 	require.Nil(t, err)
 	assert.Equal(t, out, res.IDs)
@@ -38,7 +38,7 @@ func assertExWrapCounts(t *T, now core.TS, ex exWrap, counts []uint64, aa ...cor
 	res, err := testPeel.c.Query(core.QueryActions{
 		KeyBase:      ex.byArb.Base,
 		QueryActions: aa,
-		Now:          now.Time(),
+		Now:          now,
 	})
 	require.Nil(t, err)
 	assert.Equal(t, counts, res.Counts)

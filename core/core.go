@@ -537,9 +537,8 @@ type QueryActions struct {
 	QueryActions []QueryAction
 
 	// Optional, may be passed in if there is a previous notion of "current
-	// time", to maintain consitency
-	// TODO should probably be TS
-	Now time.Time `msg:"-"`
+	// time", to maintain consistency
+	Now TS `msg:"-"`
 }
 
 // QueryRes contains all the return values from a Query
@@ -553,8 +552,8 @@ type QueryRes struct {
 func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 	var err error
 
-	if qas.Now.IsZero() {
-		qas.Now = time.Now()
+	if qas.Now == 0 {
+		qas.Now = NewTS(time.Now())
 	}
 
 	var resb []byte
@@ -563,7 +562,7 @@ func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 		qasb := bb[1]
 		k := Key{Base: qas.KeyBase}.String(c.o.RedisPrefix)
 		resb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
-	}, NewTS(qas.Now), &qas)
+	}, qas.Now, &qas)
 	if err != nil {
 		return QueryRes{}, err
 	}
