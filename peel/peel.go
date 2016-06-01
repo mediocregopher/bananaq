@@ -321,8 +321,8 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	qq = append(qq, ewInProg.removeExpired(now)...)
 	qq = append(qq, ewRedo.removeExpired(now)...)
 
-	// find all events who missed their ack deadline, remove them
-	// from both inProgs and add them to redo
+	// find all events who missed their ack deadline, remove them from inProg
+	// and add them to redo
 	qq = append(qq, ewInProg.before(now, 0))
 	qq = append(qq, ewInProg.removeFromInput())
 	qq = append(qq, ewRedo.addFromInput(0)...)
@@ -337,8 +337,8 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	return err
 }
 
-// CleanAvailable cleans up the stored Events for a given queue across all
-// consumer groups, removing those which have expired.
+// CleanAvailable cleans up expired events out of the given queue's set of
+// events which are available for consumer groups to retrieve
 func (p Peel) CleanAvailable(queue string) error {
 	now := core.NewTS(time.Now())
 
@@ -358,7 +358,7 @@ func (p Peel) CleanAvailable(queue string) error {
 }
 
 // CleanAll will call CleanAvailable on all known queues and Clean on all of
-// their known consumer groups. Will stop execution at the first error
+// their known consumer groups. Will return at the first error
 func (p Peel) CleanAll() error {
 	qcg, err := p.AllQueuesConsumerGroups()
 	if err != nil {
@@ -419,7 +419,6 @@ func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 			return QueueStats{}, err
 		}
 		qq = append(qq,
-			// reset the input
 			core.QueryAction{
 				SingleGet: &keyPtr,
 			},
