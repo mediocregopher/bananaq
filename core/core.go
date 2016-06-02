@@ -463,7 +463,7 @@ type QueryRemoveByScore struct {
 
 // QuerySingleSet will set the given Key to the first ID in the input. If the
 // input to this action has no IDs then nothing happens.  The output from this
-// action will be the input. The expire on the ID will be used to expire the key
+// action will be the input.
 //
 // If IfNewer is set, the key will only be set if its ID is newer than the ID
 // already in the Key. This does not change the output in any way
@@ -509,6 +509,10 @@ type QueryAction struct {
 
 	// Filters Events out of the input. See its doc string for more info
 	*QueryFilter
+
+	// Deletes whatever the Key's contents are. The input to this action becomes
+	// the output
+	Delete *Key
 
 	// Stops the pipeline of QueryActions and returns the previous output
 	Break bool

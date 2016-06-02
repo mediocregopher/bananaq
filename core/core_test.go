@@ -944,4 +944,19 @@ func TestSingleGetSet(t *T) {
 	})
 	require.Nil(t, err)
 	assert.Equal(t, id, res.IDs[0])
+
+	// Make sure delete works, here works as well as anywhere to test it
+	res, err = testCore.Query(QueryActions{
+		KeyBase: key.Base,
+		QueryActions: []QueryAction{
+			{
+				Delete: &key,
+			},
+			{
+				SingleGet: &key,
+			},
+		},
+	})
+	require.Nil(t, err)
+	assert.Empty(t, res.IDs)
 }

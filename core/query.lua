@@ -224,11 +224,7 @@ local function query_action(input, qa)
                     end
                 end
             end
-
-            local exp = math.floor(input[1].Expire / 1000) -- to milliseconds
-            exp = exp + 1 -- add one for funsies
             redis.call("SET", key, input[1].packed)
-            redis.call("PEXPIREAT", key, exp)
         end
         return input, false
     end
@@ -240,6 +236,12 @@ local function query_action(input, qa)
         id = expandID(id)
         if id.Expire < nowTS then return {}, false end
         return {id}, false
+    end
+
+    if qa.Delete then
+        local key = keyString(qa.Delete)
+        redis.call("DEL", key)
+        return input, false
     end
 
     if qa.QueryFilter then return query_filter(input, qa.QueryFilter), false end

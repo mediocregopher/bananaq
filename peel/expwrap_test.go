@@ -85,6 +85,7 @@ func TestExWrapFirstAfterAllBefore(t *T) {
 	assertExWrapOut(t, now, ex, []core.ID{id1, id2}, ex.before(id3.T, 0))
 	assertExWrapOut(t, now, ex, []core.ID{id1}, ex.before(id2.T, 0))
 	assertExWrapOut(t, now, ex, []core.ID{}, ex.before(id1.T, 0))
+	assertExWrapOut(t, now, ex, []core.ID{id1}, ex.before(id3.T, 1), ex.beforeInput(0))
 }
 
 func TestExWrapCount(t *T) {

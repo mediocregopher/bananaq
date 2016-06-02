@@ -25,6 +25,8 @@ func newExWrap(k core.Key) exWrap {
 	return ew
 }
 
+// TODO make sure range exclusions are consistent
+
 // returns actions which will add the IDs which are input into them to this
 // exWrap. score will be the score with which all IDs will be added, if it's
 // zero then each ID's T field will be used as its score
@@ -135,6 +137,22 @@ func (ew exWrap) before(ts core.TS, limit int64) core.QueryAction {
 				QueryScoreRange: core.QueryScoreRange{
 					Max:     ts,
 					MaxExcl: true,
+				},
+				Limit:   limit,
+				Reverse: true,
+			},
+		},
+	}
+}
+
+func (ew exWrap) beforeInput(limit int64) core.QueryAction {
+	return core.QueryAction{
+		QuerySelector: &core.QuerySelector{
+			Key: ew.byArb,
+			QueryRangeSelect: &core.QueryRangeSelect{
+				QueryScoreRange: core.QueryScoreRange{
+					MaxExcl:      true,
+					MaxFromInput: true,
 				},
 				Limit:   limit,
 				Reverse: true,

@@ -1,7 +1,6 @@
 package peel
 
 import (
-	"log"
 	. "testing"
 	"time"
 
@@ -53,7 +52,8 @@ func assertKey(t *T, k core.Key, ii ...core.ID) {
 	}
 }
 
-func assertSingleKey(t *T, k core.Key, id core.ID) {
+// id optional, no id means asserting that the key is empty
+func assertSingleKey(t *T, k core.Key, id ...core.ID) {
 	qa := core.QueryActions{
 		KeyBase: k.Base,
 		QueryActions: []core.QueryAction{
@@ -64,8 +64,12 @@ func assertSingleKey(t *T, k core.Key, id core.ID) {
 	}
 	res, err := testPeel.c.Query(qa)
 	require.Nil(t, err)
-	require.NotEmpty(t, res.IDs)
-	assert.Equal(t, id, res.IDs[0])
+	if len(id) == 0 {
+		assert.Empty(t, res.IDs)
+	} else {
+		require.NotEmpty(t, res.IDs)
+		assert.Equal(t, id, res.IDs)
+	}
 }
 
 func TestQAdd(t *T) {
@@ -412,48 +416,55 @@ func TestQAck(t *T) {
 }
 
 func TestClean(t *T) {
-	queue := testutil.RandStr()
+	queue, ii := newTestQueue(t, 6)
 	cgroup := testutil.RandStr()
 	now := time.Now()
 
-	ewInProg, ewRedo, _, err := queueCGroupKeys(queue, cgroup)
+	for i, id := range ii {
+		t.Logf("ii[%d]: %d (%#v)", i, id, id)
+	}
+
+	ewInProg, ewRedo, keyPtr, err := queueCGroupKeys(queue, cgroup)
 	require.Nil(t, err)
 
 	// in progress, has neither expired nor missed its deadline
-	ii0 := randID(t, false)
-	log.Printf("ii0: %s", ii0)
-	requireAddToKey(t, ewInProg.byArb, ii0, core.NewTS(now.Add(1*time.Second)))
-	requireAddToKey(t, ewInProg.byExp, ii0, ii0.Expire)
+	requireAddToKey(t, ewInProg.byArb, ii[0], core.NewTS(now.Add(1*time.Second)))
+	requireAddToKey(t, ewInProg.byExp, ii[0], ii[0].Expire)
 
 	// in progress, missed its deadline
-	ii1 := randID(t, false)
-	log.Printf("ii1: %s", ii1)
-	requireAddToKey(t, ewInProg.byArb, ii1, core.NewTS(now.Add(-10*time.Millisecond)))
-	requireAddToKey(t, ewInProg.byExp, ii1, ii1.Expire)
+	requireAddToKey(t, ewInProg.byArb, ii[1], core.NewTS(now.Add(-10*time.Millisecond)))
+	requireAddToKey(t, ewInProg.byExp, ii[1], ii[1].Expire)
 
 	// in progress, expired
-	ii2 := randID(t, true)
-	log.Printf("ii2: %s", ii2)
-	requireAddToKey(t, ewInProg.byArb, ii2, core.NewTS(now.Add(-10*time.Millisecond)))
-	requireAddToKey(t, ewInProg.byExp, ii2, ii2.Expire)
+	ii[2].Expire = core.NewTS(now.Add(-10 * time.Minute))
+	requireAddToKey(t, ewInProg.byArb, ii[2], core.NewTS(now.Add(-10*time.Millisecond)))
+	requireAddToKey(t, ewInProg.byExp, ii[2], ii[2].Expire)
 
 	// in redo, not expired
-	ii3 := randID(t, false)
-	log.Printf("ii3: %s", ii3)
-	requireAddToKey(t, ewRedo.byArb, ii3, 0)
-	requireAddToKey(t, ewRedo.byExp, ii3, ii3.Expire)
+	requireAddToKey(t, ewRedo.byArb, ii[3], 0)
+	requireAddToKey(t, ewRedo.byExp, ii[3], ii[3].Expire)
 
 	// in redo, expired
-	ii4 := randID(t, true)
-	log.Printf("ii4: %s", ii4)
-	requireAddToKey(t, ewRedo.byArb, ii4, 0)
-	requireAddToKey(t, ewRedo.byExp, ii4, ii4.Expire)
+	ii[4].Expire = core.NewTS(now.Add(-10 * time.Minute))
+	requireAddToKey(t, ewRedo.byArb, ii[4], 0)
+	requireAddToKey(t, ewRedo.byExp, ii[4], ii[4].Expire)
+
+	// pointer, not older than the oldest in avail
+	requireSetSingleKey(t, keyPtr, ii[0])
 
 	require.Nil(t, testPeel.Clean(queue, cgroup))
-	assertKey(t, ewInProg.byArb, ii0)
-	assertKey(t, ewInProg.byExp, ii0)
-	assertKey(t, ewRedo.byArb, ii1, ii3)
-	assertKey(t, ewRedo.byExp, ii1, ii3)
+	assertKey(t, ewInProg.byArb, ii[0])
+	assertKey(t, ewInProg.byExp, ii[0])
+	assertKey(t, ewRedo.byArb, ii[1], ii[3])
+	assertKey(t, ewRedo.byExp, ii[1], ii[3])
+	assertSingleKey(t, keyPtr, ii[0])
+
+	// pointer now older than the oldest in avail, should get deleted
+	oldID := ii[0]
+	oldID.T--
+	requireSetSingleKey(t, keyPtr, oldID)
+	require.Nil(t, testPeel.Clean(queue, cgroup))
+	assertSingleKey(t, keyPtr)
 }
 
 func TestCleanAvailable(t *T) {

@@ -311,6 +311,18 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 func (p Peel) Clean(queue, consumerGroup string) error {
 	now := core.NewTS(time.Now())
 
+	ewAvail, err := queueAvailable(queue)
+	if err != nil {
+		return err
+	}
+
+	// This is a giant hack. But this is literally the only case where we don't
+	// want to exclude the right side afaik, and we *have* to include it no
+	// matter what, so it seemed weird to add a new method or a parameter to an
+	// existing method. Don't do this again.
+	beforeAvail := ewAvail.beforeInput(1)
+	beforeAvail.QuerySelector.QueryRangeSelect.QueryScoreRange.MaxExcl = false
+
 	ewInProg, ewRedo, keyPtr, err := queueCGroupKeys(queue, consumerGroup)
 	if err != nil {
 		return err
@@ -326,6 +338,17 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 	qq = append(qq, ewInProg.before(now, 0))
 	qq = append(qq, ewInProg.removeFromInput())
 	qq = append(qq, ewRedo.addFromInput(0)...)
+
+	// get the pointer, if there's no events equal to or older than it in the
+	// queue, delete it
+	qq = append(qq, core.QueryAction{SingleGet: &keyPtr})
+	qq = append(qq, beforeAvail)
+	qq = append(qq, core.QueryAction{
+		Delete: &keyPtr,
+		QueryConditional: core.QueryConditional{
+			IfNoInput: true,
+		},
+	})
 
 	qa := core.QueryActions{
 		KeyBase:      keyPtr.Base,
