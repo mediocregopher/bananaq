@@ -245,8 +245,11 @@ type Event struct {
 
 // NewEvent initializes an event struct with the given information, as well as
 // creating an ID for the event
+
+// NewEvent creates an event struct with the given information. The returned
+// Event will have the given contents, and its ID will a unique identifier based
+// on the passed in now and expire.
 func (c *Core) NewEvent(now, expire TS, contents string) (Event, error) {
-	// TODO docs for this method could be better
 	nowMono, err := c.MonoTS(now)
 	if err != nil {
 		return Event{}, err
