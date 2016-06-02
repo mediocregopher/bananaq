@@ -12,7 +12,7 @@ import (
 )
 
 func newTestPeel() *Peel {
-	p, err := pool.New("tcp", "127.0.0.1:6379", 1)
+	p, err := pool.New("tcp", "127.0.0.1:6379", 10)
 	if err != nil {
 		panic(err)
 	}
