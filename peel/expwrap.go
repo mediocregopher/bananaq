@@ -25,8 +25,6 @@ func newExWrap(k core.Key) exWrap {
 	return ew
 }
 
-// TODO make sure range exclusions are consistent
-
 // returns actions which will add the IDs which are input into them to this
 // exWrap. score will be the score with which all IDs will be added, if it's
 // zero then each ID's T field will be used as its score

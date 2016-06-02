@@ -2,9 +2,7 @@ package main
 
 import (
 	"errors"
-	"math/rand"
 	"net"
-	"time"
 
 	"github.com/levenlabs/go-llog"
 	"github.com/mc0/okq/config"
@@ -22,6 +20,7 @@ var pkgKV = llog.KV{
 }
 
 // TODO go through and make sure "okq" is completely gone
+// TODO metalint everything
 
 func main() {
 	l := lever.New("bananaq", nil)
@@ -53,9 +52,6 @@ func main() {
 	bgQaddPoolSize, _ := l.ParamInt("--bg-qadd-pool-size")
 
 	llog.SetLevelFromString(logLevel)
-
-	// TODO do this locally wherever rand is actually needed
-	rand.Seed(time.Now().UnixNano())
 
 	kv := llog.KV{"listenAddr": listenAddr}
 
