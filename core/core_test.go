@@ -10,19 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testCore *Core
+var testCore = &Core{
+	Opts: Opts{RedisPrefix: testutil.RandStr()},
+}
 
 func init() {
 	p, err := pool.New("tcp", "127.0.0.1:6379", 1)
 	if err != nil {
 		panic(err)
 	}
-
-	o := &Opts{RedisPrefix: testutil.RandStr()}
-	if testCore, err = New(p, o); err != nil {
+	testCore.Cmder = p
+	testCore.ErrCh = make(chan error, 1)
+	if err := testCore.Run(); err != nil {
 		panic(err)
 	}
-	go func() { panic(testCore.Run()) }()
+	go func() { panic(<-testCore.ErrCh) }()
 }
 
 func TestMonoTS(t *T) {
@@ -115,7 +117,7 @@ func assertKey(t *T, k Key, ii ...ID) {
 
 // Assert the contents of a set as well as its scores
 func assertKeyRaw(t *T, k Key, ixm map[ID]int64) {
-	arr, err := testCore.Cmd("ZRANGE", k.String(testCore.o.RedisPrefix), 0, -1, "WITHSCORES").Array()
+	arr, err := testCore.Cmd("ZRANGE", k.String(testCore.RedisPrefix), 0, -1, "WITHSCORES").Array()
 	require.Nil(t, err)
 
 	m := map[ID]int64{}
@@ -160,7 +162,7 @@ func TestKeyString(t *T) {
 	}
 
 	for _, k := range kk {
-		str := k.String(testCore.o.RedisPrefix)
+		str := k.String(testCore.RedisPrefix)
 		assert.Equal(t, k, KeyFromString(str), "key:%q", str)
 	}
 }
@@ -252,7 +254,7 @@ func TestQueryAddScores(t *T) {
 }
 
 func TestQueryRemoveByScore(t *T) {
-	// This test is not very strict, most of the funtionality here comes form
+	// This test is not very strict, most of the functionality here comes form
 	// QueryScoreRange, which is tested in TestQueryRangeSelect extensively
 	base := testutil.RandStr()
 	k, ii := randPopulatedKey(t, base, 4)
@@ -854,7 +856,7 @@ func TestKeyScan(t *T) {
 		found, err := testCore.KeyScan(pattern)
 		require.Nil(t, err)
 		for _, k := range found {
-			assert.Contains(t, kk, k, "k.String():%q", k.String(testCore.o.RedisPrefix))
+			assert.Contains(t, kk, k, "k.String():%q", k.String(testCore.RedisPrefix))
 		}
 	}
 

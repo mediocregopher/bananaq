@@ -3,38 +3,24 @@
 // number of clients along-side any number of server instances. None of them
 // need to coordinate with each other.
 //
-// Initialization
+// Initialization and Running
 //
 // A new peel takes in either a *pool.Pool or a *cluster.Cluster from the
-// radix.v2 package, and can be initialized like so:
+// radix.v2 package, and can be initialized and run like so:
 //
 // 	rpool, err := pool.New("tcp", "127.0.0.1:6379", 10)
 //	if err != nil {
 //		panic(err)
 //	}
 //
-//	p, err := peel.New(rpool, nil)
-//	if err != nil {
+//	p := &peel.Peel{Core: &core.Core{Cmder: rpool}}
+//	if err := p.Run(); err != nil {
 //		panic(err)
 //	}
 //
-// Running
-//
 // All peels require that you call the Run method in them in order for them to
-// work properly. Run will block until an error is reached. Additionally, you
-// will need to periodically call Clean on the queues and consumer groups you
-// care about, or CleanAll for a less precise approach. It's not strictly
-// necessary to call Clean, but if you don't do it you'll be wasting memory in
-// redis.
-//
-//	go func() { panic(p.Run() }
-//	go func() {
-//		for range <-time.Tick(20 * time.Second) {
-//			if err := p.CleanAll(); err != nil {
-//				panic(err)
-//			}
-//		}
-//	}
+// work properly. Run will run in the background, and will write to ErrCh and
+// exit if it encounters an error.
 //
 // After that
 //
@@ -59,28 +45,85 @@ import (
 	"github.com/mediocregopher/radix.v2/util"
 )
 
+// Opts are extra configuration fields which may be set on Peel
+type Opts struct {
+	core.Opts
+
+	// Default 1 minute. Period of time to wait between automatic cleaning of
+	// all queues/consumer groups.
+	CleanPeriod time.Duration
+}
+
 // Peel contains all the information needed to actually implement the
 // application logic of bananaq. it is intended to be used both as the server
 // component and as a client for external applications which want to be able to
-// interact with the database directly. All methods on Peel are thread-safe.
+// interact with the database directly. All methods on Peel are thread-safe,
+// except Run which should only be run by a single goroutine at a time.
 type Peel struct {
 	c *core.Core
+
+	// Required. Must either be a pool or a cluster instance.
+	util.Cmder `msg:"-"`
+
+	// Optional. If given, any errors encountered by Run will be written to it.
+	// Should be buffered by at least 1
+	ErrCh chan error
+
+	// Optional. If given, may be later closed by any process to stop a Run
+	StopCh chan struct{}
+
+	// Extra options you usually don't have to worry about
+	Opts
 }
 
-// New initializes a Peel struct with a Core, using the given redis Cmder as a
-// backer. The Cmder can be either a radix.v2 *pool.Pool or *cluster.Cluster.
-// core.Opts may be nil to use default values.
-func New(cmder util.Cmder, o *core.Opts) (Peel, error) {
-	c, err := core.New(cmder, o)
-	return Peel{c}, err
-}
+// Run performs all the background work needed to support Peel. It spawns a
+// background go-routine which does the actual work, and which can be stopped
+// with the StopCh. If the background goroutine encounters an error then the
+// error will be written to ErrCh (if set) and then the goroutine will stop.
+// After that Run may be called again to retry.
+func (p *Peel) Run() error {
 
-// Run performs all the background work needed to support Peel. It will block
-// until an error is reached, and then return that. At that point the caller
-// should handle the error (i.e. probably log it), and then decide whether to
-// stop execution or call Run again.
-func (p Peel) Run() error {
-	return p.c.Run()
+	if p.Opts.CleanPeriod == 0 {
+		p.Opts.CleanPeriod = 1 * time.Minute
+	}
+
+	coreStopCh := make(chan struct{})
+	p.c = &core.Core{
+		Cmder:  p.Cmder,
+		ErrCh:  make(chan error, 1),
+		StopCh: coreStopCh,
+		Opts:   p.Opts.Opts,
+	}
+	if err := p.c.Run(); err != nil {
+		return err
+	}
+
+	go func() {
+		tick := time.NewTicker(p.CleanPeriod)
+		defer tick.Stop()
+
+		var err error
+		defer func() {
+			if err != nil && p.ErrCh != nil {
+				p.ErrCh <- err
+			}
+			close(coreStopCh)
+		}()
+
+		for {
+			select {
+			case <-tick.C:
+				if err = p.CleanAll(); err != nil {
+					return
+				}
+			case err = <-p.c.ErrCh:
+				return
+			case <-p.StopCh:
+			}
+		}
+	}()
+
+	return nil
 }
 
 // QAddCommand describes the parameters which can be passed into the QAdd
@@ -93,7 +136,7 @@ type QAddCommand struct {
 
 // QAdd adds an event to a queue. Once Expire is reached the event will no
 // longer be considered valid in the queue, and will eventually be cleaned up.
-func (p Peel) QAdd(c QAddCommand) (core.ID, error) {
+func (p *Peel) QAdd(c QAddCommand) (core.ID, error) {
 	now := core.NewTS(time.Now())
 	e, err := p.c.NewEvent(now, core.NewTS(c.Expire), c.Contents)
 	if err != nil {
@@ -143,7 +186,7 @@ type QGetCommand struct {
 // isn't necessary.
 //
 // An empty event is returned if there are no available events for the queue.
-func (p Peel) QGet(c QGetCommand) (core.Event, error) {
+func (p *Peel) QGet(c QGetCommand) (core.Event, error) {
 	if c.BlockUntil.IsZero() {
 		return p.qgetDirect(c)
 	}
@@ -174,7 +217,7 @@ func (p Peel) QGet(c QGetCommand) (core.Event, error) {
 	}
 }
 
-func (p Peel) qgetDirect(c QGetCommand) (core.Event, error) {
+func (p *Peel) qgetDirect(c QGetCommand) (core.Event, error) {
 	ewAvail, err := queueAvailable(c.Queue)
 	if err != nil {
 		return core.Event{}, err
@@ -268,7 +311,7 @@ type QAckCommand struct {
 // QGet with an AckDeadline. Returns true if the Event was successfully
 // acknowledged. false will be returned if the deadline was missed, and
 // therefore some other consumer may re-process the Event later.
-func (p Peel) QAck(c QAckCommand) (bool, error) {
+func (p *Peel) QAck(c QAckCommand) (bool, error) {
 	now := core.NewTS(time.Now())
 
 	ewInProg, err := queueInProgress(c.Queue, c.ConsumerGroup)
@@ -302,13 +345,10 @@ func (p Peel) QAck(c QAckCommand) (bool, error) {
 	return len(res.IDs) > 0, nil
 }
 
-// TODO maybe peel should just do the cleaning automatically?
-
 // Clean finds all the events which were retrieved for the given
 // queue/consumerGroup which weren't ack'd by the deadline, and makes them
-// available to be retrieved again. This should be called periodically for all
-// queue/consumerGroups.
-func (p Peel) Clean(queue, consumerGroup string) error {
+// available to be retrieved again.
+func (p *Peel) Clean(queue, consumerGroup string) error {
 	now := core.NewTS(time.Now())
 
 	ewAvail, err := queueAvailable(queue)
@@ -362,7 +402,7 @@ func (p Peel) Clean(queue, consumerGroup string) error {
 
 // CleanAvailable cleans up expired events out of the given queue's set of
 // events which are available for consumer groups to retrieve
-func (p Peel) CleanAvailable(queue string) error {
+func (p *Peel) CleanAvailable(queue string) error {
 	now := core.NewTS(time.Now())
 
 	ewAvail, err := queueAvailable(queue)
@@ -382,7 +422,7 @@ func (p Peel) CleanAvailable(queue string) error {
 
 // CleanAll will call CleanAvailable on all known queues and Clean on all of
 // their known consumer groups. Will return at the first error
-func (p Peel) CleanAll() error {
+func (p *Peel) CleanAll() error {
 	qcg, err := p.AllQueuesConsumerGroups()
 	if err != nil {
 		return err
@@ -424,7 +464,7 @@ type QueueStats struct {
 	ConsumerGroupStats map[string]ConsumerGroupStats
 }
 
-func (p Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
+func (p *Peel) qstatus(queue string, cgroups []string) (QueueStats, error) {
 	now := core.NewTS(time.Now())
 	ewAvail, err := queueAvailable(queue)
 	if err != nil {
@@ -489,7 +529,7 @@ type QStatusCommand struct {
 // QueuesConsumerGroups may be set to specify specific queue/consumer group
 // combinations to retrieve, otherwise all known queues/consumer groups will be
 // retrieved.
-func (p Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
+func (p *Peel) QStatus(c QStatusCommand) (map[string]QueueStats, error) {
 	var qcg map[string][]string
 	var err error
 	if len(c.QueuesConsumerGroups) > 0 {
@@ -556,7 +596,7 @@ func cgStatsInfos(cgsm map[string]ConsumerGroupStats) []string {
 
 // QInfo returns a human readable version of the information from QStatus. It
 // uses the same arguments.
-func (p Peel) QInfo(c QStatusCommand) ([]string, error) {
+func (p *Peel) QInfo(c QStatusCommand) ([]string, error) {
 	m, err := p.QStatus(c)
 	if err != nil {
 		return nil, err

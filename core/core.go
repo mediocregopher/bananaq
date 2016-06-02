@@ -58,15 +58,7 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
-// Core contains all the information needed to interact with the underlying
-// redis instances for bananaq. All methods on Core are thread-safe.
-type Core struct {
-	util.Cmder `msg:"-"`
-	w          *wublub.Wublub
-	o          *Opts
-}
-
-// Opts are optional fields which may be passed into New to affect behavior
+// Opts are extra configuration fields which may be set on Core
 type Opts struct {
 	// Default 10. Number of threads which may publish simultaneously.
 	NumPublishers int
@@ -75,53 +67,76 @@ type Opts struct {
 	RedisPrefix string
 }
 
-// New initializes a Core struct using the given Cmder. The Cmder must either be
-// a pool or a cluster instance, it cannot be anything else. Opts may be nil.
-func New(cmder util.Cmder, o *Opts) (*Core, error) {
-	if o == nil {
-		o = &Opts{}
+// Core contains all the information needed to interact with the underlying
+// redis instances for bananaq. All methods on Core are thread-safe, except Run
+// which should only be run by a single goroutine at any time.
+type Core struct {
+	w *wublub.Wublub
+
+	// Required. Must either be a pool or a cluster instance.
+	util.Cmder `msg:"-"`
+
+	// Optional. If given, any errors encountered by Run will be written to it.
+	// Should be buffered by at least 1
+	ErrCh chan error
+
+	// Optional. If given, may be later closed by any process to stop a Run
+	StopCh chan struct{}
+
+	// Extra options you usually don't have to worry about
+	Opts
+}
+
+// Run performs all the background work needed to support Core. It spawns a
+// background go-routine which does the actual work, and which can be stopped
+// with the StopCh. If the background goroutine encounters an error then the
+// error will be written to ErrCh (if set) and then the goroutine will stop.
+// After that Run may be called again to retry.
+func (c *Core) Run() error {
+	if c.NumPublishers == 0 {
+		c.NumPublishers = 10
 	}
-	if o.NumPublishers == 0 {
-		o.NumPublishers = 10
-	}
-	if o.RedisPrefix == "" {
-		o.RedisPrefix = "bananaq"
+	if c.RedisPrefix == "" {
+		c.RedisPrefix = "bananaq"
 	}
 
 	var df pool.DialFunc
-	if c, ok := cmder.(*cluster.Cluster); ok {
+	if cl, ok := c.Cmder.(*cluster.Cluster); ok {
 		rand := rand.New(rand.NewSource(time.Now().UnixNano()))
 		df = func(_, _ string) (*redis.Client, error) {
 			istr := strconv.Itoa(rand.Int())
-			return c.GetForKey(istr)
+			return cl.GetForKey(istr)
 		}
 	} else {
-		cp := cmder.(*pool.Pool)
+		cp := c.Cmder.(*pool.Pool)
 		df = func(_, _ string) (*redis.Client, error) {
 			return cp.Get()
 		}
 	}
 
-	p, err := pool.NewCustom("", "", o.NumPublishers, df)
+	p, err := pool.NewCustom("", "", c.NumPublishers, df)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	c := &Core{
-		Cmder: cmder,
-		w:     wublub.New(wublub.Opts{Pool: p}),
-		o:     o,
-	}
+	c.w = wublub.New(wublub.Opts{Pool: p})
+	cwErrCh := make(chan error, 1)
+	go func() { cwErrCh <- c.w.Run() }()
 
-	return c, nil
-}
+	go func() {
+		select {
+		case err := <-cwErrCh:
+			if c.ErrCh != nil {
+				c.ErrCh <- err
+			}
+		case <-c.StopCh:
+		}
 
-// Run performs all the background work needed to support Core. It will block
-// until an error is reached, and then return that. At that point the caller
-// should handle the error (i.e. probably log it), and then decide whether to
-// stop execution or call Run again.
-func (c *Core) Run() error {
-	return c.w.Run()
+		c.w.Close()
+		p.Empty()
+	}()
+
+	return nil
 }
 
 // TS identifies a single point in time as an integer number of microseconds
@@ -177,7 +192,7 @@ func (c Core) MonoTS(t TS) (TS, error) {
 		return last_raw
 	`
 
-	idKey := c.o.RedisPrefix + ":monots"
+	idKey := c.RedisPrefix + ":monots"
 
 	var ib []byte
 	var err error
@@ -265,7 +280,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c.Cmder, lua, 1, k.String(c.o.RedisPrefix), pex, eb).Err
+		err = util.LuaEval(c.Cmder, lua, 1, k.String(c.RedisPrefix), pex, eb).Err
 	}, &e)
 	return err
 }
@@ -274,7 +289,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 // expired or never existed
 func (c *Core) GetEvent(id ID) (Event, error) {
 	k := Key{Base: id.String(), Subs: []string{"event"}}
-	r := c.Cmd("GET", k.String(c.o.RedisPrefix))
+	r := c.Cmd("GET", k.String(c.RedisPrefix))
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}
@@ -564,8 +579,8 @@ func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
-		k := Key{Base: qas.KeyBase}.String(c.o.RedisPrefix)
-		resb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
+		k := Key{Base: qas.KeyBase}.String(c.RedisPrefix)
+		resb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.RedisPrefix).Bytes()
 	}, qas.Now, &qas)
 	if err != nil {
 		return QueryRes{}, err
@@ -586,7 +601,7 @@ func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 func (c *Core) KeyScan(k Key) ([]Key, error) {
 	s := util.NewScanner(c.Cmder, util.ScanOpts{
 		Command: "SCAN",
-		Pattern: k.String(c.o.RedisPrefix),
+		Pattern: k.String(c.RedisPrefix),
 	})
 
 	var ret []Key
