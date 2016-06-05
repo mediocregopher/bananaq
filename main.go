@@ -69,30 +69,14 @@ func main() {
 			llog.Fatal("could not connect to redis", kv.Set("err", err))
 		}
 
-		p = &peel.Peel{
-			Cmder: cmder,
-			ErrCh: make(chan error, 1),
-		}
-		// start it once in the beginning, to make sure it works
-		if err := p.Run(); err != nil {
-			llog.Fatal("could not initialize peel", kv.Set("err", err))
-		}
-
-		// read peel errors and keep the peel alive
+		p := peel.New(cmder, nil)
 		go func() {
-			for err := range p.ErrCh {
+			for {
+				err := <-p.Run(nil)
 				llog.Error("error during peel runtime", kv.Set("err", err))
-				for {
-					time.Sleep(500 * time.Millisecond)
-					if err = p.Run(); err != nil {
-						llog.Error("error trying to reinitialize peel", kv.Set("err", err))
-					} else {
-						break
-					}
-				}
+				time.Sleep(500 * time.Millisecond)
 			}
 		}()
-
 	}
 
 	// Start bgQAdd processes

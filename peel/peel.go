@@ -14,12 +14,14 @@
 //	}
 //
 //	p := &peel.Peel{Cmder: rpool}
-//	if err := p.Run(); err != nil {
-//		panic(err)
+//	for {
+//  	errCh := p.Run(nil)
+//		err := <-errCh // block until error is hit
+//		log.Printf("peel run encountered error: %s", err)
 //	}
 //
 // All peels require that you call the Run method in them in order for them to
-// work properly. Run will run in the background, and will write to ErrCh and
+// work properly. Run will run in the background, and will write to errCh and
 // exit if it encounters an error.
 //
 // After that
@@ -61,56 +63,52 @@ type Opts struct {
 // except Run which should only be run by a single goroutine at a time.
 type Peel struct {
 	c *core.Core
-
-	// Required. Must either be a pool or a cluster instance.
-	util.Cmder `msg:"-"`
-
-	// Optional. If given, any errors encountered by Run will be written to it.
-	// Should be buffered by at least 1
-	ErrCh chan error
-
-	// Optional. If given, may be later closed by any process to stop a Run
-	StopCh chan struct{}
-
-	// Extra options you usually don't have to worry about
-	Opts
+	o Opts
 }
 
-// TODO maybe block on all methods unless Run is actually running?
 // TODO make methods take in a now parameter
 
+// New initializes a new Peel instance based on the given Cmder (which may be a
+// *pool.Pool or *cluster.Cluster) and extra options (which may be nil). Run
+// must be called in order to actually use the Peel.
+func New(cmder util.Cmder, o *Opts) *Peel {
+	if o == nil {
+		o = &Opts{}
+	}
+	if o.CleanPeriod == 0 {
+		o.CleanPeriod = 1 * time.Minute
+	}
+	return &Peel{
+		c: core.New(cmder, &o.Opts),
+		o: *o,
+	}
+}
+
 // Run performs all the background work needed to support Peel. It spawns a
-// background go-routine which does the actual work, and which can be stopped
-// with the StopCh. If the background goroutine encounters an error then the
-// error will be written to ErrCh (if set) and then the goroutine will stop.
-// After that Run may be called again to retry.
-func (p *Peel) Run() error {
+// background go-routine which does the actual work.
+// If the background goroutine encounters an error then the
+// error will be written to the returne dchannel and then the goroutine will stop.
+// Run must be called again to keep using the Peel.
+//
+// The returned channel is buffered by 1, and will only ever be written to once,
+// so it's not strictly necessary to read from it.
+//
+// stopCh is optional and may be used to prematurely stop execution of Run. nil
+// will be written to the returned channel in this case.
+func (p *Peel) Run(stopCh chan struct{}) chan error {
+	innerStopCh := make(chan struct{})
 
-	if p.Opts.CleanPeriod == 0 {
-		p.Opts.CleanPeriod = 1 * time.Minute
-	}
-
-	coreStopCh := make(chan struct{})
-	p.c = &core.Core{
-		Cmder:  p.Cmder,
-		ErrCh:  make(chan error, 1),
-		StopCh: coreStopCh,
-		Opts:   p.Opts.Opts,
-	}
-	if err := p.c.Run(); err != nil {
-		return err
-	}
+	coreErrCh := p.c.Run(innerStopCh)
+	errCh := make(chan error, 1)
 
 	go func() {
-		tick := time.NewTicker(p.CleanPeriod)
+		tick := time.NewTicker(p.o.CleanPeriod)
 		defer tick.Stop()
 
 		var err error
 		defer func() {
-			if err != nil && p.ErrCh != nil {
-				p.ErrCh <- err
-			}
-			close(coreStopCh)
+			errCh <- err
+			close(innerStopCh)
 		}()
 
 		for {
@@ -119,14 +117,14 @@ func (p *Peel) Run() error {
 				if err = p.CleanAll(); err != nil {
 					return
 				}
-			case err = <-p.c.ErrCh:
+			case err = <-coreErrCh:
 				return
-			case <-p.StopCh:
+			case <-stopCh:
 			}
 		}
 	}()
 
-	return nil
+	return errCh
 }
 
 // QAddCommand describes the parameters which can be passed into the QAdd

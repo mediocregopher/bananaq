@@ -72,71 +72,60 @@ type Opts struct {
 // which should only be run by a single goroutine at any time.
 type Core struct {
 	w *wublub.Wublub
+	c util.Cmder
+	o Opts
+}
 
-	// Required. Must either be a pool or a cluster instance.
-	util.Cmder `msg:"-"`
+// New initializes a new Core instance based on the given Cmder (which may be a
+// *pool.Pool or *cluster.Cluster) and extra options (which may be nil). Run
+// must be called in order to actually use the Core
+func New(cmder util.Cmder, o *Opts) *Core {
+	if o == nil {
+		o = &Opts{}
+	}
+	if o.NumPublishers == 0 {
+		o.NumPublishers = 10
+	}
+	if o.RedisPrefix == "" {
+		o.RedisPrefix = "bananaq"
+	}
 
-	// Optional. If given, any errors encountered by Run will be written to it.
-	// Should be buffered by at least 1
-	ErrCh chan error
-
-	// Optional. If given, may be later closed by any process to stop a Run
-	StopCh chan struct{}
-
-	// Extra options you usually don't have to worry about
-	Opts
+	return &Core{
+		w: wublub.New(nil),
+		c: cmder,
+		o: *o,
+	}
 }
 
 // Run performs all the background work needed to support Core. It spawns a
-// background go-routine which does the actual work, and which can be stopped
-// with the StopCh. If the background goroutine encounters an error then the
-// error will be written to ErrCh (if set) and then the goroutine will stop.
-// After that Run may be called again to retry.
-func (c *Core) Run() error {
-	if c.NumPublishers == 0 {
-		c.NumPublishers = 10
-	}
-	if c.RedisPrefix == "" {
-		c.RedisPrefix = "bananaq"
-	}
-
-	var df pool.DialFunc
-	if cl, ok := c.Cmder.(*cluster.Cluster); ok {
+// background go-routine which does the actual work. If Run encounters an error
+// then the error will be written to the returned channel and the background
+// routine will stop. Run must be called again to keep using the Core.
+//
+// The returned channel is buffered by 1, and will only ever be written to once,
+// so it's not strictly necessary to read from it.
+//
+// stopCh is optional and may be used to prematurely stop execution of Run. nil
+// will be written to the returned channel in this case.
+func (c *Core) Run(stopCh chan struct{}) chan error {
+	wErrCh := make(chan error, 1)
+	var addr string
+	if cl, ok := c.c.(*cluster.Cluster); ok {
 		rand := rand.New(rand.NewSource(time.Now().UnixNano()))
-		df = func(_, _ string) (*redis.Client, error) {
-			istr := strconv.Itoa(rand.Int())
-			return cl.GetForKey(istr)
-		}
+		addr = cl.GetAddrForKey(strconv.Itoa(rand.Int()))
 	} else {
-		cp := c.Cmder.(*pool.Pool)
-		df = func(_, _ string) (*redis.Client, error) {
-			return cp.Get()
+		cp := c.c.(*pool.Pool)
+		conn, err := cp.Get()
+		if err != nil {
+			wErrCh <- err
+			return wErrCh
 		}
+		addr = conn.Addr
+		cp.Put(conn)
 	}
 
-	p, err := pool.NewCustom("", "", c.NumPublishers, df)
-	if err != nil {
-		return err
-	}
-
-	c.w = wublub.New(wublub.Opts{Pool: p})
-	cwErrCh := make(chan error, 1)
-	go func() { cwErrCh <- c.w.Run() }()
-
-	go func() {
-		select {
-		case err := <-cwErrCh:
-			if c.ErrCh != nil {
-				c.ErrCh <- err
-			}
-		case <-c.StopCh:
-		}
-
-		c.w.Close()
-		p.Empty()
-	}()
-
-	return nil
+	go func() { wErrCh <- c.w.Run("tcp", addr, stopCh) }()
+	return wErrCh
 }
 
 // TS identifies a single point in time as an integer number of microseconds
@@ -192,13 +181,13 @@ func (c Core) MonoTS(t TS) (TS, error) {
 		return last_raw
 	`
 
-	idKey := c.RedisPrefix + ":monots"
+	idKey := c.o.RedisPrefix + ":monots"
 
 	var ib []byte
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
-		ib, err = util.LuaEval(c.Cmder, lua, 1, idKey, nowb).Bytes()
+		ib, err = util.LuaEval(c.c, lua, 1, idKey, nowb).Bytes()
 	}, t)
 
 	var t2 TS
@@ -268,7 +257,7 @@ func pexpireAt(t TS, buffer time.Duration) int64 {
 
 // this is separate from Key so events don't get picked up by KeyScan
 func (c *Core) eventKey(id ID) string {
-	return fmt.Sprintf("%s:event:%s", c.RedisPrefix, id.String())
+	return fmt.Sprintf("%s:event:%s", c.o.RedisPrefix, id.String())
 }
 
 // SetEvent sets the event with the given id to have the given contents. The
@@ -287,7 +276,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c.Cmder, lua, 1, c.eventKey(e.ID), pex, eb).Err
+		err = util.LuaEval(c.c, lua, 1, c.eventKey(e.ID), pex, eb).Err
 	}, &e)
 	return err
 }
@@ -295,7 +284,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 // GetEvent returns the event identified by the given ID, or ErrNotFound if it's
 // expired or never existed
 func (c *Core) GetEvent(id ID) (Event, error) {
-	r := c.Cmd("GET", c.eventKey(id))
+	r := c.c.Cmd("GET", c.eventKey(id))
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}
@@ -585,8 +574,8 @@ func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 	withMarshaled(func(bb [][]byte) {
 		nowb := bb[0]
 		qasb := bb[1]
-		k := Key{Base: qas.KeyBase}.String(c.RedisPrefix)
-		resb, err = util.LuaEval(c.Cmder, string(queryLua), 1, k, nowb, qasb, c.RedisPrefix).Bytes()
+		k := Key{Base: qas.KeyBase}.String(c.o.RedisPrefix)
+		resb, err = util.LuaEval(c.c, string(queryLua), 1, k, nowb, qasb, c.o.RedisPrefix).Bytes()
 	}, qas.Now, &qas)
 	if err != nil {
 		return QueryRes{}, err
@@ -605,9 +594,9 @@ func (c *Core) Query(qas QueryActions) (QueryRes, error) {
 // KeyScan returns all the Keys matching the given Key pattern. At least one
 // field in the given Key should be a "*"
 func (c *Core) KeyScan(k Key) ([]Key, error) {
-	s := util.NewScanner(c.Cmder, util.ScanOpts{
+	s := util.NewScanner(c.c, util.ScanOpts{
 		Command: "SCAN",
-		Pattern: k.String(c.RedisPrefix),
+		Pattern: k.String(c.o.RedisPrefix),
 	})
 
 	var ret []Key

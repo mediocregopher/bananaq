@@ -17,19 +17,14 @@ func newTestPeel() *Peel {
 		panic(err)
 	}
 
-	peel := &Peel{
-		Cmder: p,
-		ErrCh: make(chan error, 1),
-		Opts: Opts{
-			Opts: core.Opts{
-				RedisPrefix: testutil.RandStr(),
-			},
+	o := Opts{
+		Opts: core.Opts{
+			RedisPrefix: testutil.RandStr(),
 		},
 	}
-	if err := peel.Run(); err != nil {
-		panic(err)
-	}
-	go func() { panic(<-peel.ErrCh) }()
+	peel := New(p, &o)
+	errCh := peel.Run(nil)
+	go func() { panic(<-errCh) }()
 	return peel
 }
 
