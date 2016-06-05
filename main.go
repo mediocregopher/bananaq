@@ -1,38 +1,41 @@
 package main
 
 import (
-	"errors"
+	"fmt"
+	"io"
 	"net"
+	"strings"
+	"time"
 
 	"github.com/levenlabs/go-llog"
-	"github.com/mc0/okq/config"
-	"github.com/mediocregopher/bananaq/clients"
-	"github.com/mediocregopher/bananaq/clients/consumers"
-	"github.com/mediocregopher/bananaq/commands"
-	"github.com/mediocregopher/bananaq/log"
-	_ "github.com/mediocregopher/bananaq/restore"
+	"github.com/levenlabs/golib/radixutil"
+	"github.com/mediocregopher/bananaq/peel"
 	"github.com/mediocregopher/lever"
 	"github.com/mediocregopher/radix.v2/redis"
 )
 
-var pkgKV = llog.KV{
-	"pkg": "main",
-}
-
 // TODO go through and make sure "okq" is completely gone
 // TODO metalint everything
+
+var p *peel.Peel
+var bgQAddCh chan peel.QAddCommand
 
 func main() {
 	l := lever.New("bananaq", nil)
 	l.Add(lever.Param{
 		Name:        "--listen-addr",
 		Description: "Address to listen for client connections on",
-		Default:     ":4777",
+		Default:     ":5777",
 	})
 	l.Add(lever.Param{
 		Name:        "--redis-addr",
 		Description: "Address redis is listening on. May be a solo redis instance or a node in a cluster",
 		Default:     "127.0.0.1:6379",
+	})
+	l.Add(lever.Param{
+		Name:        "--redis-pool-size",
+		Description: "Size of the pool of idle connections to keep for redis. If a cluster is used, this many connections will be kept to each member of the cluster",
+		Default:     "10",
 	})
 	l.Add(lever.Param{
 		Name:        "--log-level",
@@ -48,86 +51,176 @@ func main() {
 
 	listenAddr, _ := l.ParamStr("--listen-addr")
 	redisAddr, _ := l.ParamStr("--redis-addr")
+	redisPoolSize, _ := l.ParamInt("--redis-pool-size")
 	logLevel, _ := l.ParamStr("--log-level")
-	bgQaddPoolSize, _ := l.ParamInt("--bg-qadd-pool-size")
+	bgQAddPoolSize, _ := l.ParamInt("--bg-qadd-pool-size")
 
 	llog.SetLevelFromString(logLevel)
 
-	kv := llog.KV{"listenAddr": listenAddr}
-
-	llog.Info("starting listen", pkgKV, kv)
-	server, err := net.Listen("tcp", config.ListenAddr)
-	if err != nil {
-		llog.Fatal("error listening", pkgKV, kv, llog.KV{"err": err})
-	}
-
-	log.L.Printf("listening on %s", config.ListenAddr)
-
-	incomingConns := make(chan net.Conn)
-
-	go acceptConns(server, incomingConns)
-
-	for {
-		conn := <-incomingConns
-		client := clients.NewClient(conn)
-
-		log.L.Debug(client.Sprintf("serving"))
-		go serveClient(client)
-	}
-}
-
-func acceptConns(listener net.Listener, incomingConns chan net.Conn) {
-	for {
-		conn, err := listener.Accept()
-		if conn == nil {
-			log.L.Printf("couldn't accept: %q", err)
-			continue
+	// Set up redis/peel
+	{
+		kv := llog.KV{
+			"redisAddr":     redisAddr,
+			"redisPoolSize": redisPoolSize,
 		}
-		incomingConns <- conn
+		llog.Info("connecting to redis", kv)
+		cmder, err := radixutil.DialMaybeCluster("tcp", redisAddr, redisPoolSize)
+		if err != nil {
+			llog.Fatal("could not connect to redis", kv.Set("err", err))
+		}
+
+		p = &peel.Peel{
+			Cmder: cmder,
+			ErrCh: make(chan error, 1),
+		}
+		// start it once in the beginning, to make sure it works
+		if err := p.Run(); err != nil {
+			llog.Fatal("could not initialize peel", kv.Set("err", err))
+		}
+
+		// read peel errors and keep the peel alive
+		go func() {
+			for err := range p.ErrCh {
+				llog.Error("error during peel runtime", kv.Set("err", err))
+				for {
+					time.Sleep(500 * time.Millisecond)
+					if err = p.Run(); err != nil {
+						llog.Error("error trying to reinitialize peel", kv.Set("err", err))
+					} else {
+						break
+					}
+				}
+			}
+		}()
+
 	}
+
+	// Start bgQAdd processes
+	{
+		if bgQAddPoolSize < 1 {
+			llog.Fatal("--bg-qadd-pool-size must be at least 1")
+		}
+		kv := llog.KV{"bgQAddPoolSize": bgQAddPoolSize}
+		llog.Debug("starting bgQAdd routines", kv)
+		bgQAddCh = make(chan peel.QAddCommand, bgQAddPoolSize*10)
+		for i := 0; i < bgQAddPoolSize; i++ {
+			go func(i int) {
+				kv = kv.Set("i", i)
+				for qadd := range bgQAddCh {
+					qkv := llog.KV{"queue": qadd.Queue}
+					llog.Debug("bg qadd", kv, qkv)
+					if ret, err := p.QAdd(qadd); err != nil {
+						llog.Error("error doing background qadd", kv, qkv, llog.KV{"err": err})
+					} else {
+						llog.Debug("bg qadd ret", kv, qkv, llog.KV{"ret": ret})
+					}
+				}
+			}(i)
+		}
+	}
+
+	// Start actually listening
+	{
+		kv := llog.KV{"listenAddr": listenAddr}
+
+		llog.Info("starting listen", kv)
+		server, err := net.Listen("tcp", listenAddr)
+		if err != nil {
+			llog.Fatal("error listening", kv, llog.KV{"err": err})
+		}
+
+		go func() {
+			for {
+				conn, err := server.Accept()
+				if conn == nil {
+					llog.Error("error accepting", kv.Set("err", err))
+					continue
+				}
+				go serveConn(conn)
+			}
+		}()
+	}
+
+	llog.Info("ready, set, go!")
+	select {}
+
 }
 
-var invalidCmdResp = redis.NewResp(errors.New("ERR invalid command"))
-
-func serveClient(client *clients.Client) {
-	conn := client.Conn
+func serveConn(conn net.Conn) {
+	kv := llog.KV{
+		"remoteAddr": conn.RemoteAddr().String(),
+	}
 	rr := redis.NewRespReader(conn)
 
-outer:
-	for {
-		var command string
-		var args []string
+	llog.Debug("client connected", kv)
 
+	var cmd string
+	var args []string
+
+	readCmd := func() (string, []string, error) {
 		m := rr.Read()
 		if m.IsType(redis.IOErr) {
-			log.L.Debug(client.Sprintf("client connection error %q", m.Err))
-			if len(client.Queues) > 0 {
-				consumers.UpdateQueues(client, []string{})
-			}
-			client.Close()
-			return
+			return "", nil, m.Err
 		}
 
 		parts, err := m.Array()
 		if err != nil {
-			log.L.Debug(client.Sprintf("error parsing to array: %q", err))
-			continue outer
+			return "", nil, fmt.Errorf("invalid command: %s", err)
 		}
+		args = args[:0]
 		for i := range parts {
 			val, err := parts[i].Str()
 			if err != nil {
-				log.L.Debug(client.Sprintf("invalid command part %#v: %s", parts[i], err))
-				invalidCmdResp.WriteTo(conn)
-				continue outer
+				return "", nil, fmt.Errorf("invalid command: %s", err)
 			}
 			if i == 0 {
-				command = val
+				cmd = val
 			} else {
 				args = append(args, val)
 			}
 		}
+		return strings.ToUpper(cmd), args, nil
+	}
 
-		log.L.Debug(client.Sprintf("%s %#v", command, args))
-		commands.Dispatch(client, command, args)
+	writeErr := func(err error) {
+		redis.NewResp(fmt.Errorf("ERR %s", err)).WriteTo(conn)
+	}
+
+	for {
+		cmd, args, err := readCmd()
+		if nerr, ok := err.(*net.OpError); ok && nerr.Timeout() {
+			continue
+		} else if err == io.EOF {
+			llog.Debug("client disconnected", kv)
+			conn.Close()
+			return
+		} else if err != nil {
+			llog.Warn("client error reading command", kv.Set("err", err))
+			writeErr(err)
+		}
+
+		shortArgs := make([]string, len(args))
+		for i, arg := range args {
+			if len(arg) > 100 {
+				arg = arg[:100] + "..."
+			}
+			shortArgs[i] = arg
+		}
+		cmdKV := llog.KV{"cmd": cmd, "args": shortArgs}
+
+		llog.Debug("client command", kv, cmdKV)
+
+		// ret may be an error if it's a client error (e.g. invalid params)
+		if ret, err := dispatch(cmd, args); err != nil {
+			llog.Error("error dispatching command", kv, cmdKV, llog.KV{"err": err})
+			redis.NewResp(fmt.Errorf("server-side error: %s", err)).WriteTo(conn)
+			writeErr(fmt.Errorf("server-side error: %s", err))
+		} else if rerr, ok := ret.(error); ok {
+			llog.Warn("client error dispatching command", kv, cmdKV, llog.KV{"err": rerr})
+			writeErr(rerr)
+		} else {
+			llog.Debug("client command response", kv, cmdKV, llog.KV{"ret": ret})
+			redis.NewResp(ret).WriteTo(conn)
+		}
 	}
 }

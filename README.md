@@ -206,8 +206,9 @@ An array structure is returned with the following layout:
 
 * Consumer group information is yet another key-value array
 
+TODO this output isn't quite right
 ```
-> QSTATUS QUEUE foo QUEUE bar GROUP consumerGroup1 GROUP consumerGroup2
+> QSTATUS QUEUE foo GROUP consumerGroup1 GROUP consumerGroup2 QUEUE bar
 < 1) "foo"
 < 2) 1) "total"
      2) (integer) 5
@@ -277,7 +278,7 @@ returns its output in a nicely formatted way. The returned value will be an
 array of strings, one per queue, each formatted like so:
 
 ```
-> QINFO QUEUE foo QUEUE bar GROUP consumerGroup1 GROUP consumerGroup2
+> QINFO QUEUE foo GROUP consumerGroup1 GROUP consumerGroup2 QUEUE bar
 < 1) queue:"foo" total:5
 < 2) consumerGroup:"consumerGroup1" avail:1 inProg:1 redo:2
 < 3) consumerGroup:"consumerGroup2" avail:1 inProg:1 redo:2

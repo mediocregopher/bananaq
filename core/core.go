@@ -266,11 +266,15 @@ func pexpireAt(t TS, buffer time.Duration) int64 {
 	return t.Time().Add(buffer).UnixNano() / 1e6 // to millisecond
 }
 
+// this is separate from Key so events don't get picked up by KeyScan
+func (c *Core) eventKey(id ID) string {
+	return fmt.Sprintf("%s:event:%s", c.RedisPrefix, id.String())
+}
+
 // SetEvent sets the event with the given id to have the given contents. The
 // event will expire based on the ID field in it (which will be truncated to an
 // integer) added with the given buffer
 func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
-	k := Key{Base: e.ID.String(), Subs: []string{"event"}}
 	pex := pexpireAt(e.ID.Expire, expireBuffer)
 	lua := `
 		local key = KEYS[1]
@@ -283,7 +287,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 	var err error
 	withMarshaled(func(bb [][]byte) {
 		eb := bb[0]
-		err = util.LuaEval(c.Cmder, lua, 1, k.String(c.RedisPrefix), pex, eb).Err
+		err = util.LuaEval(c.Cmder, lua, 1, c.eventKey(e.ID), pex, eb).Err
 	}, &e)
 	return err
 }
@@ -291,8 +295,7 @@ func (c *Core) SetEvent(e Event, expireBuffer time.Duration) error {
 // GetEvent returns the event identified by the given ID, or ErrNotFound if it's
 // expired or never existed
 func (c *Core) GetEvent(id ID) (Event, error) {
-	k := Key{Base: id.String(), Subs: []string{"event"}}
-	r := c.Cmd("GET", k.String(c.RedisPrefix))
+	r := c.Cmd("GET", c.eventKey(id))
 	if r.IsType(redis.Nil) {
 		return Event{}, ErrNotFound
 	}

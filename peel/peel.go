@@ -13,7 +13,7 @@
 //		panic(err)
 //	}
 //
-//	p := &peel.Peel{Core: &core.Core{Cmder: rpool}}
+//	p := &peel.Peel{Cmder: rpool}
 //	if err := p.Run(); err != nil {
 //		panic(err)
 //	}
@@ -75,6 +75,9 @@ type Peel struct {
 	// Extra options you usually don't have to worry about
 	Opts
 }
+
+// TODO maybe block on all methods unless Run is actually running?
+// TODO make methods take in a now parameter
 
 // Run performs all the background work needed to support Peel. It spawns a
 // background go-routine which does the actual work, and which can be stopped
